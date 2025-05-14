@@ -172,7 +172,7 @@ nltk==3.9.1
     # via
     #   -c requirements/common-constraints.txt
     #   llama-index-core
-numpy==1.26.4
+numpy==2.2.5
     # via
     #   -c requirements/common-constraints.txt
     #   -r requirements/requirements-help.in
@@ -253,7 +253,7 @@ sqlalchemy[asyncio]==2.0.40
     # via
     #   -c requirements/common-constraints.txt
     #   llama-index-core
-sympy==1.14.0
+sympy==1.13.1
     # via
     #   -c requirements/common-constraints.txt
     #   torch
@@ -273,7 +273,7 @@ tokenizers==0.21.1
     # via
     #   -c requirements/common-constraints.txt
     #   transformers
-torch==2.2.2
+torch==2.6.0
     # via
     #   -c requirements/common-constraints.txt
     #   -r requirements/requirements-help.in
