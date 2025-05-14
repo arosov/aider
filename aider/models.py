@@ -21,6 +21,13 @@ from aider.openrouter import OpenRouterModelManager
 from aider.sendchat import ensure_alternating_roles, sanity_check_messages
 from aider.utils import check_pip_install_extra
 
+try:
+    import google.generativeai as genai_models
+    GENAI_AVAILABLE_MODELS = True
+except ImportError:
+    GENAI_AVAILABLE_MODELS = False
+    genai_models = None # Ensure genai_models is defined
+
 RETRY_TIMEOUT = 60
 
 request_timeout = 600
@@ -125,6 +132,25 @@ class ModelSettings:
     remove_reasoning: Optional[str] = None  # Deprecated alias for reasoning_tag
     system_prompt_prefix: Optional[str] = None
     accepts_settings: Optional[list] = None
+
+
+_genai_configured_models = False # This global flag tracks if genai_models.configure has succeeded at least once
+
+def _configure_genai_models(api_key_to_use):
+    global _genai_configured_models
+    if not GENAI_AVAILABLE_MODELS:
+        return
+    if _genai_configured_models: # Already configured globally
+        return
+
+    if api_key_to_use:
+        try:
+            genai_models.configure(api_key=api_key_to_use)
+            _genai_configured_models = True # Set global flag on success
+        except Exception as e:
+            print(f"Warning (models.py): Failed to configure google-generativeai with provided API key: {e}")
+            _genai_configured_models = False # Explicitly false on failure
+    # else: No API key provided to this function.
 
 
 # Load model settings from package resource
@@ -305,26 +331,53 @@ model_info_manager = ModelInfoManager()
 
 class Model(ModelSettings):
     def __init__(
-        self, model, weak_model=None, editor_model=None, editor_edit_format=None, verbose=False
+        self, model, weak_model=None, editor_model=None, editor_edit_format=None, verbose=False,
+        gemini_api_key=None # NEW parameter
     ):
         # Map any alias to its canonical name
-        model = MODEL_ALIASES.get(model, model)
+        model_name_resolved = MODEL_ALIASES.get(model, model)
 
-        self.name = model
+        self.name = model_name_resolved
         self.verbose = verbose
 
-        self.max_chat_history_tokens = 1024
-        self.weak_model = None
-        self.editor_model = None
+        # Initialize other ModelSettings fields by calling configure_model_settings early.
+        # Default values from ModelSettings dataclass are used if not overridden.
+        # self.configure_model_settings will populate fields like edit_format, use_repo_map etc.
+        # from MODEL_SETTINGS list based on self.name.
+        self.extra_model_settings = next((ms for ms in MODEL_SETTINGS if ms.name == "aider/extra_params"), None)
+        self.configure_model_settings(self.name) # Pass the resolved name
 
-        # Find the extra settings
-        self.extra_model_settings = next(
-            (ms for ms in MODEL_SETTINGS if ms.name == "aider/extra_params"), None
-        )
+        self.is_gemini_model = self.name and (self.name.startswith("gemini-") or self.name.startswith("models/gemini-"))
+        self.genai_configured_for_model = False # NEW: Instance-specific config status
+        self.gemini_api_key_provided_to_model = gemini_api_key # Store the passed key
 
-        self.info = self.get_model_info(model)
+        if self.is_gemini_model:
+            if GENAI_AVAILABLE_MODELS:
+                if self.gemini_api_key_provided_to_model:
+                    _configure_genai_models(self.gemini_api_key_provided_to_model) # Attempt to configure
+                    if _genai_configured_models: # Check global status
+                        self.genai_configured_for_model = True
+                    else:
+                        # Key was provided, but genai_models.configure failed.
+                        print(
+                            f"Warning (models.py): Provided Gemini API key for model {self.name} "
+                            "did not result in successful google-generativeai configuration. "
+                            "Token counting and other operations might fail or fall back."
+                        )
+                # else: No API key specifically passed for this model instance.
+                # It might rely on a global configuration if _genai_configured_models is already true.
+                elif _genai_configured_models: # Check if already globally configured
+                     self.genai_configured_for_model = True
+
+        self.weak_model = None # Initialize before get_weak_model
+        self.editor_model = None # Initialize before get_editor_model
+
+        # Find the extra settings (already handled in configure_model_settings if 'aider/extra_params' is in MODEL_SETTINGS)
+
+        self.info = self.get_model_info(self.name) # Use resolved name
 
         # Are all needed keys/params available?
+        # This must be called after genai_configured_for_model is set
         res = self.validate_environment()
         self.missing_keys = res.get("missing_keys")
         self.keys_in_environment = res.get("keys_in_environment")
@@ -332,9 +385,11 @@ class Model(ModelSettings):
         max_input_tokens = self.info.get("max_input_tokens") or 0
         # Calculate max_chat_history_tokens as 1/16th of max_input_tokens,
         # with minimum 1k and maximum 8k
+        # Default from ModelSettings is 1024, this overrides it.
         self.max_chat_history_tokens = min(max(max_input_tokens / 16, 1024), 8192)
 
-        self.configure_model_settings(model)
+        # self.configure_model_settings(self.name) # Already called above
+
         if weak_model is False:
             self.weak_model_name = None
         else:
@@ -346,6 +401,7 @@ class Model(ModelSettings):
             self.get_editor_model(editor_model, editor_edit_format)
 
     def get_model_info(self, model):
+        # model here is already resolved name
         return model_info_manager.get_model_info(model)
 
     def _copy_fields(self, source):
@@ -599,25 +655,106 @@ class Model(ModelSettings):
         return litellm.encode(model=self.name, text=text)
 
     def token_count(self, messages):
-        if type(messages) is list:
+        if self.is_gemini_model:
+            use_gemini_native_counting = False
+            if not GENAI_AVAILABLE_MODELS:
+                if self.verbose:
+                    print(f"Verbose (models.py): google-generativeai library not available. Token counting for {self.name} will use litellm default.")
+            elif not self.genai_configured_for_model:
+                warning_message = (
+                    f"Warning (models.py): google-generativeai not configured for model {self.name} due to missing/invalid API key. "
+                    "Token counting will use litellm default, which may be inaccurate."
+                )
+                if self.gemini_api_key_provided_to_model and not _genai_configured_models: # Key was provided but global config failed
+                     warning_message = (
+                        f"Warning (models.py): google-generativeai failed to initialize with the provided API key for model {self.name}. "
+                        "Token counting will use litellm default, which may be inaccurate."
+                    )
+                print(warning_message)
+            else: # GENAI_AVAILABLE_MODELS is True and self.genai_configured_for_model is True
+                use_gemini_native_counting = True
+
+            if use_gemini_native_counting:
+                try:
+                    gemini_model_name_for_counting = self.name
+                    if gemini_model_name_for_counting.startswith("models/"):
+                        gemini_model_name_for_counting = gemini_model_name_for_counting[len("models/"):]
+
+                    contents_for_counting = []
+                    system_instruction_text = None
+
+                    if isinstance(messages, str):
+                        contents_for_counting.append(messages)
+                    elif isinstance(messages, list):
+                        for msg in messages:
+                            role = msg.get("role")
+                            content = msg.get("content")
+                            if role == "system":
+                                if system_instruction_text is None: system_instruction_text = ""
+                                system_instruction_text += str(content) + "\n"
+                                continue
+                            current_parts = []
+                            if isinstance(content, str):
+                                current_parts.append(genai_models.types.Part(text=content))
+                            elif isinstance(content, list): # OpenAI multimodal format
+                                for item in content:
+                                    if item.get("type") == "text":
+                                        current_parts.append(genai_models.types.Part(text=item["text"]))
+                            if current_parts:
+                                gemini_role = "user" if role == "user" else "model"
+                                contents_for_counting.append(genai_models.types.Content(parts=current_parts, role=gemini_role))
+                    else:
+                        contents_for_counting.append(str(messages))
+
+                    # This might raise if genai_models is None (e.g. import failed but GENAI_AVAILABLE_MODELS was true)
+                    # However, use_gemini_native_counting path implies GENAI_AVAILABLE_MODELS is true.
+                    gm = genai_models.GenerativeModel(gemini_model_name_for_counting)
+
+                    total_tokens = 0
+                    if contents_for_counting:
+                        response = gm.count_tokens(contents_for_counting)
+                        total_tokens += response.total_tokens
+
+                    if system_instruction_text:
+                        response_sys = gm.count_tokens(system_instruction_text.strip())
+                        total_tokens += response_sys.total_tokens
+
+                    return total_tokens # Success using Gemini native counting
+
+                except Exception as e:
+                    print(f"Warning (models.py): Error during Gemini native token counting for {self.name}: {e}. Falling back to litellm.")
+                    # Fall through to litellm common logic if native counting fails
+
+        # Common logic for all models (including fallbacks from Gemini path)
+        if isinstance(messages, list):
             try:
                 return litellm.token_counter(model=self.name, messages=messages)
             except Exception as err:
-                print(f"Unable to count tokens: {err}")
+                print(f"Unable to count tokens for {self.name} using litellm.token_counter: {err}")
+                return 0 # Consistent with original behavior on error
+
+        # This part is for non-list messages, from original code
+        if not self.tokenizer: # self.tokenizer uses litellm.encode
+            # This case implies self.tokenizer could be None.
+            # The original code would just `return` (implicitly None). Let's return 0 for consistency.
+            print(f"Warning: No tokenizer available for {self.name} for non-list messages.")
+            return 0
+
+        text_to_tokenize = ""
+        if isinstance(messages, str):
+            text_to_tokenize = messages
+        else:
+            try:
+                # Attempt to serialize other types to JSON for tokenization
+                text_to_tokenize = json.dumps(messages)
+            except TypeError as e:
+                print(f"Cannot serialize non-list messages for tokenizer for {self.name}: {e}")
                 return 0
 
-        if not self.tokenizer:
-            return
-
-        if type(messages) is str:
-            msgs = messages
-        else:
-            msgs = json.dumps(messages)
-
         try:
-            return len(self.tokenizer(msgs))
-        except Exception as err:
-            print(f"Unable to count tokens: {err}")
+            return len(self.tokenizer(text_to_tokenize))
+        except Exception as err_tok:
+            print(f"Unable to count tokens for {self.name} using self.tokenizer: {err_tok}")
             return 0
 
     def token_count_for_image(self, fname):
@@ -698,26 +835,49 @@ class Model(ModelSettings):
 
         # https://github.com/BerriAI/litellm/issues/3190
 
-        model = self.name
-        res = litellm.validate_environment(model)
+        model_to_validate = self.name
+        original_res = litellm.validate_environment(model_to_validate)
+
+        if self.is_gemini_model and self.genai_configured_for_model:
+            # If genai is configured for this model instance (meaning Aider provided a key that worked),
+            # then we don't care if litellm thinks GEMINI_API_KEY/GOOGLE_API_KEY is missing from env.
+            keys_to_ignore = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+            if original_res.get("missing_keys"):
+                original_res["missing_keys"] = [
+                    k for k in original_res["missing_keys"] if k not in keys_to_ignore
+                ]
+
+            # If ignoring these keys makes missing_keys empty, and keys_in_environment was false,
+            # we can consider keys_in_environment to be true for our purposes regarding Gemini.
+            if not original_res.get("missing_keys") and not original_res.get("keys_in_environment"):
+                 # This doesn't mean all keys are set, just that the Gemini ones are handled.
+                 # For simplicity, we'll let litellm's original keys_in_environment stand unless
+                 # all missing_keys are cleared. If all are cleared, then keys_in_environment can be true.
+                 if not original_res.get("missing_keys"): # Check again after modification
+                    original_res["keys_in_environment"] = True
+
+
+        res = original_res # Use the potentially modified result
 
         # If missing AWS credential keys but AWS_PROFILE is set, consider AWS credentials valid
-        if res["missing_keys"] and any(
+        if res.get("missing_keys") and any(
             key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"] for key in res["missing_keys"]
         ):
-            if model.startswith("bedrock/") or model.startswith("us.anthropic."):
+            if model_to_validate.startswith("bedrock/") or model_to_validate.startswith("us.anthropic."):
                 if os.environ.get("AWS_PROFILE"):
+                    current_missing_keys = res.get("missing_keys", [])
                     res["missing_keys"] = [
                         k
-                        for k in res["missing_keys"]
+                        for k in current_missing_keys
                         if k not in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
                     ]
-                    if not res["missing_keys"]:
+                    # If all missing keys are now resolved this way, update keys_in_environment
+                    if not res["missing_keys"] and not res.get("keys_in_environment"):
                         res["keys_in_environment"] = True
 
-        if res["keys_in_environment"]:
+        if res.get("keys_in_environment"): # Use .get() for safety
             return res
-        if res["missing_keys"]:
+        if res.get("missing_keys"): # Use .get() for safety
             return res
 
         provider = self.info.get("litellm_provider", "").lower()
