@@ -36,6 +36,7 @@ class SwitchCoder(Exception):
 class Commands:
     voice = None
     scraper = None
+    mcp_profile_manager = None
 
     def clone(self):
         return Commands(
@@ -48,6 +49,7 @@ class Commands:
             verbose=self.verbose,
             editor=self.editor,
             original_read_only_fnames=self.original_read_only_fnames,
+            mcp_profile_manager=self.mcp_profile_manager,
         )
 
     def __init__(
@@ -63,10 +65,12 @@ class Commands:
         verbose=False,
         editor=None,
         original_read_only_fnames=None,
+        mcp_profile_manager=None,
     ):
         self.io = io
         self.coder = coder
         self.parser = parser
+        self.mcp_profile_manager = mcp_profile_manager
         self.args = args
         self.verbose = verbose
 

@@ -126,6 +126,7 @@ class Coder:
     file_watcher = None
     mcp_servers = None
     mcp_tools = None
+    mcp_profile_manager = None
 
     @classmethod
     def create(
@@ -343,9 +344,11 @@ class Coder:
         auto_copy_context=False,
         auto_accept_architect=True,
         mcp_servers=None,
+        mcp_profile_manager=None,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
         self.analytics = analytics if analytics is not None else Analytics()
+        self.mcp_profile_manager = mcp_profile_manager
 
         self.event = self.analytics.event
         self.chat_language = chat_language

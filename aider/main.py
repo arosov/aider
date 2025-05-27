@@ -31,6 +31,7 @@ from aider.history import ChatSummary
 from aider.io import InputOutput
 from aider.llm import litellm  # noqa: F401; properly init litellm on launch
 from aider.mcp import load_mcp_servers
+from aider.mcp_profile_manager import MCPProfileManager
 from aider.models import ModelSettings
 from aider.onboarding import offer_openrouter_oauth, select_default_model
 from aider.repo import ANY_GIT_ERROR, GitRepo
@@ -738,6 +739,10 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         if args.gitignore:
             check_gitignore(git_root, io)
 
+    # Instantiate MCPProfileManager
+    mcp_profile_manager = MCPProfileManager(io, args)
+    mcp_profile_manager.load_or_initialize_profiles()
+
     if args.verbose:
         show = format_settings(parser, args)
         io.tool_output(show)
@@ -939,6 +944,7 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         verbose=args.verbose,
         editor=args.editor,
         original_read_only_fnames=read_only_fnames,
+        mcp_profile_manager=mcp_profile_manager,
     )
 
     summarizer = ChatSummary(
@@ -1004,6 +1010,7 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             auto_copy_context=args.copy_paste,
             auto_accept_architect=args.auto_accept_architect,
             mcp_servers=mcp_servers,
+            mcp_profile_manager=mcp_profile_manager,
         )
     except UnknownEditFormat as err:
         io.tool_error(str(err))
