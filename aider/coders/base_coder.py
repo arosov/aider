@@ -197,6 +197,11 @@ class Coder:
             kwargs = use_kwargs
             from_coder.ok_to_warm_cache = False
 
+        # Ensure 'mcp_servers' is not passed as it's no longer a valid argument for Coder.__init__.
+        # This applies whether kwargs come from from_coder or directly to Coder.create.
+        if 'mcp_servers' in kwargs:
+            del kwargs['mcp_servers']
+
         for coder in coders.__all__:
             if hasattr(coder, "edit_format") and coder.edit_format == edit_format:
                 res = coder(main_model, io, **kwargs)
