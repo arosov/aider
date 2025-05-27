@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import asyncio
+import base64
 import hashlib
 import json
 import locale
@@ -25,7 +27,7 @@ except ImportError:  # Babel not installed – we will fall back to a small mapp
     Locale = None
 from json.decoder import JSONDecodeError
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 from litellm import experimental_mcp_client
 from rich.console import Console
@@ -39,6 +41,7 @@ from aider.io import ConfirmGroup, InputOutput
 from aider.linter import Linter
 from aider.llm import litellm
 from aider.models import RETRY_TIMEOUT
+from aider.mcp.server import McpServer
 from aider.reasoning_tags import (
     REASONING_TAG,
     format_reasoning_content,
@@ -1664,7 +1667,7 @@ class Coder:
             self._print_tool_call_info(server_tool_calls_map)
 
             if self.io.confirm_ask("Run tools?"):
-                tool_responses = self._execute_tool_calls(server_tool_calls)
+                tool_responses = self._execute_tool_calls(server_tool_calls_map)
 
                 # Add the assistant message with tool calls
                 # Converting to a dict so it can be safely dumped to json
