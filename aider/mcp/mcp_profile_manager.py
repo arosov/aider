@@ -110,13 +110,13 @@ def get_known_mcp_server_names(
         servers_from_file_arg = load_mcp_servers(mcp_servers=None, mcp_servers_file=mcpservers_file_arg, io=io, verbose=False)
         if servers_from_file_arg:
             loaded_mcp_objects.extend(servers_from_file_arg)
-    
+
     # Extract unique names from the McpServer objects
     server_names_set = set()
     for server_obj in loaded_mcp_objects:
         if hasattr(server_obj, 'name') and isinstance(server_obj.name, str) and server_obj.name:
             server_names_set.add(server_obj.name)
-    
+
     return sorted(list(server_names_set))
 
 class MCPProfileManager:
@@ -195,11 +195,23 @@ class MCPProfileManager:
             self.active_mcp_client_pool = None # Ensure it's cleared
             return
 
-        all_server_configs = getattr(self.settings, 'mcpservers', [])
-        if not isinstance(all_server_configs, list): # Ensure it's a list if it was some other type
-            all_server_configs = []
-            
-        matched_server_configs = [s_conf for s_conf in all_server_configs if isinstance(s_conf, dict) and s_conf.get('name') in profile_to_enable.server_names]
+        # Retrieve server configurations using the centralized load_mcp_servers function
+        mcpservers_arg_val = getattr(self.settings, 'mcp_servers', None)
+        mcpservers_file_arg_val = getattr(self.settings, 'mcp_servers_file', None)
+        verbose_setting = getattr(self.settings, 'verbose', False)
+
+        all_mcp_server_objects = load_mcp_servers(
+            mcp_servers=mcpservers_arg_val,
+            mcp_servers_file=mcpservers_file_arg_val,
+            io=self.io,
+            verbose=verbose_setting
+        )
+
+        # Filter these McpServer objects by name and get their config dictionaries
+        matched_server_configs = [
+            s_obj.config for s_obj in all_mcp_server_objects
+            if s_obj.name in profile_to_enable.server_names
+        ]
 
         if not matched_server_configs:
             self.io.tool_error(f"No configured MCP servers found for profile '{profile_name}'. Check server names and .aider.conf.yml.")
