@@ -1592,6 +1592,57 @@ class Commands:
         announcements = "\n".join(self.coder.get_announcements())
         self.io.tool_output(announcements)
 
+    def cmd_mcp(self, args_str: str):
+        "Manage MCP (Model-Controller-Proxy) profiles"
+        args = args_str.strip().split()
+
+        if not self.mcp_profile_manager:
+            self.io.tool_error("MCP profile manager is not initialized.")
+            return
+
+        if not args:
+            profiles_details = self.mcp_profile_manager.list_profiles_details()
+            self.io.tool_output("Available MCP profiles:")
+            if profiles_details:
+                for name, servers in profiles_details:
+                    self.io.tool_output(
+                        f"  - {name}: {', '.join(servers) if servers else ' (no servers)'}"
+                    )
+            else:
+                self.io.tool_output("  (No profiles defined)")
+
+            active_name = self.mcp_profile_manager.active_profile_name
+            if active_name:
+                self.io.tool_output(f"\nCurrently active MCP profile: {active_name}")
+            else:
+                self.io.tool_output("\nNo MCP profile is currently active.")
+
+            self.io.tool_output("\nCommands:")
+            self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
+            self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
+            # Add more subcommands as they are implemented
+            # self.io.tool_output("  /mcp create <profile_name> [server_name ...]")
+            # self.io.tool_output("  /mcp delete <profile_name>")
+            # self.io.tool_output("  /mcp add <profile_name> <server_name>")
+            # self.io.tool_output("  /mcp remove <profile_name> <server_name>")
+            return
+
+        sub_command = args[0]
+        if sub_command == "enable":
+            if len(args) > 1:
+                profile_name = args[1]
+                # Placeholder for enable logic
+                self.io.tool_error(f"Subcommand 'enable {profile_name}' not yet implemented.")
+            else:
+                self.io.tool_error("Usage: /mcp enable <profile_name>")
+        elif sub_command == "disable":
+            # Placeholder for disable logic
+            self.io.tool_error("Subcommand 'disable' not yet implemented.")
+        else:
+            self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
+            self.io.tool_output("Valid subcommands are: enable, disable")
+
+
     def cmd_copy_context(self, args=None):
         """Copy the current chat context as markdown, suitable to paste into a web UI"""
 
