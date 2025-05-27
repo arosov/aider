@@ -204,7 +204,26 @@ class MCPProfileManager:
             self.io.tool_error(f"No configured MCP servers found for profile '{profile_name}'. Check server names and .aider.conf.yml.")
             return
 
-        self.active_mcp_client_pool = MCPClientPool(self.io, main_model, main_edit_format, matched_server_configs)
+        pool = MCPClientPool(self.io, main_model, main_edit_format, matched_server_configs)
+        try:
+            # Run the async method to fetch tools in a blocking way
+            asyncio.run(pool.fetch_and_cache_tools())
+        except RuntimeError as e:
+            if "cannot be called from a running event loop" in str(e):
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # This case should ideally be avoided by design.
+                    # If enable_profile is called from an async context, it should be awaited.
+                    # For now, log a warning and proceed without tools if this rare case occurs.
+                    self.io.tool_warning("Warning: Could not fetch MCP tools due to running asyncio event loop during profile enabling.")
+                else:
+                    self.io.tool_error(f"Error fetching MCP tools: {e}")
+                    return # Stop if asyncio.run fails not due to existing loop
+            else:
+                self.io.tool_error(f"Error fetching MCP tools: {e}")
+                return # Stop on other runtime errors
+
+        self.active_mcp_client_pool = pool
         self.active_profile_name = profile_name
         self.io.tool_output(f"MCP profile '{profile_name}' enabled with {len(matched_server_configs)} server(s).")
 

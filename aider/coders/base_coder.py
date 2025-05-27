@@ -343,7 +343,7 @@ class Coder:
         file_watcher=None,
         auto_copy_context=False,
         auto_accept_architect=True,
-        mcp_servers=None,
+        # mcp_servers is no longer used directly by BaseCoder for initialization
         mcp_profile_manager=None,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
@@ -372,7 +372,7 @@ class Coder:
         self.detect_urls = detect_urls
 
         self.num_cache_warming_pings = num_cache_warming_pings
-        self.mcp_servers = mcp_servers
+        # self.mcp_servers = mcp_servers # No longer stored directly for initialization
 
         if not fnames:
             fnames = []
@@ -537,9 +537,9 @@ class Coder:
         self.auto_test = auto_test
         self.test_cmd = test_cmd
 
-        # Instantiate MCP tools
-        if self.mcp_servers:
-            self.initialize_mcp_tools()
+        # MCP tools are now initialized via MCPProfileManager when a profile is enabled.
+        # BaseCoder will get tools from the active pool.
+
         # validate the functions jsonschema
         if self.functions:
             from jsonschema import Draft7Validator
@@ -1652,12 +1652,16 @@ class Coder:
         if tool_call_response is None:
             return False
 
-        tool_calls = tool_call_response.choices[0].message.tool_calls
+        llm_tool_calls = tool_call_response.choices[0].message.tool_calls
+        if not llm_tool_calls:
+            return False
+            
         # Collect all tool calls grouped by server
-        server_tool_calls = self._gather_server_tool_calls(tool_calls)
+        # The keys of server_tool_calls are McpServer instances
+        server_tool_calls_map = self._gather_server_tool_calls(llm_tool_calls)
 
-        if server_tool_calls and self.num_tool_calls < self.max_tool_calls:
-            self._print_tool_call_info(server_tool_calls)
+        if server_tool_calls_map and self.num_tool_calls < self.max_tool_calls:
+            self._print_tool_call_info(server_tool_calls_map)
 
             if self.io.confirm_ask("Run tools?"):
                 tool_responses = self._execute_tool_calls(server_tool_calls)
@@ -1691,124 +1695,102 @@ class Coder:
 
                 self.io.tool_output("\n")
 
-    def _gather_server_tool_calls(self, tool_calls):
-        """Collect all tool calls grouped by server.
+    def _gather_server_tool_calls(self, llm_tool_calls: List[Any]) -> Dict[McpServer, List[Any]]:
+        """Collect all tool calls grouped by McpServer instance.
         Args:
-            tool_calls: List of tool calls from the LLM response
+            llm_tool_calls: List of tool_call objects from the LLM response.
 
         Returns:
-            dict: Dictionary mapping servers to their respective tool calls
+            dict: Dictionary mapping McpServer instances to a list of their respective tool_call objects.
         """
-        if not self.mcp_tools or len(self.mcp_tools) == 0:
-            return None
+        gathered_calls: Dict[McpServer, List[Any]] = {}
 
-        server_tool_calls = {}
-        for tool_call in tool_calls:
-            # Check if this tool_call matches any MCP tool
-            for server_name, server_tools in self.mcp_tools:
-                for tool in server_tools:
-                    if tool.get("function", {}).get("name") == tool_call.function.name:
-                        # Find the McpServer instance that will be used for communication
-                        for server in self.mcp_servers:
-                            if server.name == server_name:
-                                if server not in server_tool_calls:
-                                    server_tool_calls[server] = []
-                                server_tool_calls[server].append(tool_call)
-                                break
+        if not self.mcp_profile_manager or not self.mcp_profile_manager.active_mcp_client_pool:
+            return gathered_calls
+        
+        active_pool = self.mcp_profile_manager.active_mcp_client_pool
+        # tools_by_server is Dict[server_name, List[tool_definition_dict]]
+        tools_by_server = active_pool.get_cached_tools_by_server()
+        # mcp_instances is Dict[server_name, McpServer_instance]
+        mcp_instances = active_pool.clients
 
-        return server_tool_calls
+        if not tools_by_server or not mcp_instances:
+            return gathered_calls
 
-    def _execute_tool_calls(self, tool_calls):
-        """Process tool calls from the response and execute them if they match MCP tools.
-        Returns a list of tool response messages."""
+        for llm_tc in llm_tool_calls:
+            found_tool_for_llm_tc = False
+            for server_name, mcp_tool_definitions in tools_by_server.items():
+                for mcp_tool_def in mcp_tool_definitions:
+                    if mcp_tool_def.get("function", {}).get("name") == llm_tc.function.name:
+                        target_server_instance = mcp_instances.get(server_name)
+                        if target_server_instance:
+                            if target_server_instance not in gathered_calls:
+                                gathered_calls[target_server_instance] = []
+                            gathered_calls[target_server_instance].append(llm_tc)
+                            found_tool_for_llm_tc = True
+                            break # Found the definition for this llm_tc, move to next llm_tc
+                if found_tool_for_llm_tc:
+                    break # Moved to next llm_tc
+        
+        return gathered_calls
+
+    def _execute_tool_calls(self, server_tool_calls_map: Dict[McpServer, List[Any]]):
+        """Process tool calls from the response and execute them.
+        Args:
+            server_tool_calls_map: Dict mapping McpServer instances to their list of tool_calls.
+        Returns:
+            A list of tool response messages.
+        """
         tool_responses = []
 
         # Define the coroutine to execute all tool calls for a single server
-        async def _exec_server_tools(server, tool_calls_list):
-            tool_responses = []
+        async def _exec_server_tools(mcp_server_instance: McpServer, tool_calls_for_server: List[Any]):
+            # Renamed 'server' to 'mcp_server_instance' for clarity
+            responses_for_server = []
             try:
                 # Connect to the server once
-                session = await server.connect()
+                session = await mcp_server_instance.connect()
                 # Execute all tool calls for this server
-                for tool_call in tool_calls_list:
+                for tool_call_obj in tool_calls_for_server:
                     call_result = await experimental_mcp_client.call_openai_tool(
                         session=session,
-                        openai_tool=tool_call,
+                        openai_tool=tool_call_obj, # This is the tool_call object from LLM
                     )
                     result_text = str(call_result.content[0].text)
-                    tool_responses.append(
-                        {"role": "tool", "tool_call_id": tool_call.id, "content": result_text}
+                    responses_for_server.append(
+                        {"role": "tool", "tool_call_id": tool_call_obj.id, "content": result_text}
                     )
             finally:
-                await server.disconnect()
-            return tool_responses
+                await mcp_server_instance.disconnect()
+            return responses_for_server
 
         # Execute all tool calls concurrently
-        async def _execute_all_tool_calls():
+        async def _execute_all_tool_calls_async():
             tasks = []
-            for server, tool_calls_list in tool_calls.items():
-                tasks.append(_exec_server_tools(server, tool_calls_list))
+            for mcp_server_instance, tool_calls_for_server in server_tool_calls_map.items():
+                tasks.append(_exec_server_tools(mcp_server_instance, tool_calls_for_server))
             # Wait for all tasks to complete
-            results = await asyncio.gather(*tasks)
-            return results
+            results_list_of_lists = await asyncio.gather(*tasks, return_exceptions=True)
+            return results_list_of_lists
 
         # Run the async execution and collect results
-        if tool_calls:
-            all_results = asyncio.run(_execute_all_tool_calls())
+        if server_tool_calls_map:
+            all_results_nested = asyncio.run(_execute_all_tool_calls_async())
             # Flatten the results from all servers
-            for server_results in all_results:
-                tool_responses.extend(server_results)
-
+            for server_batch_result in all_results_nested:
+                if isinstance(server_batch_result, Exception):
+                    self.io.tool_error(f"Error executing batch of tool calls: {server_batch_result}")
+                    # Potentially add a generic error tool_response for all tools in this batch
+                elif isinstance(server_batch_result, list):
+                    tool_responses.extend(server_batch_result)
+        
         return tool_responses
 
-    def initialize_mcp_tools(self):
-        """
-        Initialize tools from all configured MCP servers. MCP Servers that fail to be
-        initialized will not be available to the Coder instance.
-        """
-        tools = []
-
-        async def get_server_tools(server):
-            try:
-                session = await server.connect()
-                server_tools = await experimental_mcp_client.load_mcp_tools(
-                    session=session, format="openai"
-                )
-                return (server.name, server_tools)
-            except Exception as e:
-                self.io.tool_warning(f"Error initializing MCP server {server.name}:\n{e}")
-                return None
-            finally:
-                await server.disconnect()
-
-        async def get_all_server_tools():
-            tasks = [get_server_tools(server) for server in self.mcp_servers]
-            results = await asyncio.gather(*tasks)
-            return [result for result in results if result is not None]
-
-        if self.mcp_servers:
-            tools = asyncio.run(get_all_server_tools())
-
-        if len(tools) > 0:
-            self.io.tool_output("MCP servers configured:")
-            for server_name, server_tools in tools:
-                self.io.tool_output(f"  - {server_name}")
-
-                if self.verbose:
-                    for tool in server_tools:
-                        tool_name = tool.get("function", {}).get("name", "unknown")
-                        tool_desc = tool.get("function", {}).get("description", "").split("\n")[0]
-                        self.io.tool_output(f"    - {tool_name}: {tool_desc}")
-
-        self.mcp_tools = tools
-
-    def get_tool_list(self):
-        """Get a flattened list of all MCP tools."""
-        tool_list = []
-        if self.mcp_tools:
-            for _, server_tools in self.mcp_tools:
-                tool_list.extend(server_tools)
-        return tool_list
+    def get_tool_list(self) -> List[Dict[str, Any]]:
+        """Get a flattened list of all MCP tools from the active profile."""
+        if self.mcp_profile_manager and self.mcp_profile_manager.active_mcp_client_pool:
+            return self.mcp_profile_manager.active_mcp_client_pool.get_cached_tools_flat_list()
+        return []
 
     def reply_completed(self):
         pass

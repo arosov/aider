@@ -27,6 +27,7 @@ class MCPClientPool:
         self.edit_format = edit_format
         self.server_configs = server_configs
         self.clients: Dict[str, McpServer] = {}
+        self.cached_tools_by_server: Optional[Dict[str, List[Dict[str, Any]]]] = None
         self._init_clients()
 
     def _init_clients(self):
@@ -57,43 +58,84 @@ class MCPClientPool:
                 if self.io and hasattr(self.io, 'tool_error'):
                     self.io.tool_error(f"Failed to initialize MCP server '{server_name}': {e}")
 
-    async def get_all_tools(self, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def _fetch_tools_for_server(self, server_name: str, client: McpServer, context: Optional[Dict[str, Any]] = None) -> Optional[List[Dict[str, Any]]]:
+        """Helper to fetch tools for a single server."""
+        from litellm import experimental_mcp_client # Local import to avoid circular dependency if mcp.py imports aider stuff
+        try:
+            session = await client.connect()
+            # The context parameter for load_mcp_tools is not standard, removing for now.
+            # If needed, it would be passed to experimental_get_tools if that was the target.
+            server_tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
+            logging.info(f"Retrieved {len(server_tools)} tools from {server_name}")
+            return server_tools
+        except Exception as e:
+            logging.error(f"Error getting tools from MCP server {server_name}: {e}")
+            if self.io and hasattr(self.io, 'tool_error'):
+                self.io.tool_error(f"Could not retrieve tools from MCP server '{server_name}': {e}")
+            return None
+        finally:
+            # Ensure client is disconnected even if tool fetching fails
+            await client.disconnect()
+
+
+    async def _fetch_tools_for_all_servers(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, Any]]]:
         """
         Connects to all MCP servers and retrieves their available tools.
 
         Args:
-            context: Optional context to pass to the MCP servers.
+            context: Optional context to pass to the MCP servers (currently unused by load_mcp_tools).
 
         Returns:
-            A list of tool definitions from all connected MCP servers.
+            A dictionary mapping server names to their list of tool definitions.
         """
-        all_tools = []
-        # TODO: Implement tool fetching logic. This will involve:
-        # 1. Iterating through self.clients.
-        # 2. For each client, ensuring it's connected (await client.connect()).
-        # 3. Calling a method on the client/session to get tools (e.g., await client.session.experimental_get_tools(context=context, format="openai_function"))
-        # 4. Aggregating the tools.
-        # 5. Handling potential errors during connection or tool retrieval for individual servers.
-
-        # Placeholder implementation:
-        if self.io and hasattr(self.io, 'tool_output'):
-            self.io.tool_output("MCPClientPool.get_all_tools() is not fully implemented yet.")
+        tools_by_server: Dict[str, List[Dict[str, Any]]] = {}
         
-        # Example of how one might connect and get tools (needs actual mcp.py library methods)
-        # for server_name, client in self.clients.items():
-        #     try:
-        #         session = await client.connect()
-        #         # Assuming a method like `experimental_get_tools` exists on the session
-        #         # The actual method name and parameters might differ based on mcp.py
-        #         server_tools = await session.experimental_get_tools(format="openai_function", context=context)
-        #         if server_tools:
-        #             all_tools.extend(server_tools)
-        #         logging.info(f"Retrieved {len(server_tools)} tools from {server_name}")
-        #     except Exception as e:
-        #         logging.error(f"Error getting tools from MCP server {server_name}: {e}")
-        #         if self.io and hasattr(self.io, 'tool_error'):
-        #             self.io.tool_error(f"Could not retrieve tools from MCP server '{server_name}': {e}")
+        tasks = []
+        for server_name, client in self.clients.items():
+            tasks.append(self._fetch_tools_for_server(server_name, client, context))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for i, server_name in enumerate(self.clients.keys()):
+            result = results[i]
+            if isinstance(result, Exception):
+                logging.error(f"Exception fetching tools from {server_name}: {result}")
+                # Optionally store empty list or skip this server
+            elif result is not None:
+                tools_by_server[server_name] = result
+        
+        return tools_by_server
+
+    async def fetch_and_cache_tools(self, context: Optional[Dict[str, Any]] = None):
+        """
+        Fetches tools from all configured servers and caches them.
+        """
+        if self.io and hasattr(self.io, 'tool_output'):
+            self.io.tool_output("Fetching tools from enabled MCP profile servers...")
+        self.cached_tools_by_server = await self._fetch_tools_for_all_servers(context)
+        if self.io and hasattr(self.io, 'tool_output'):
+            num_tools = sum(len(tools) for tools in self.cached_tools_by_server.values())
+            num_servers = len(self.cached_tools_by_server)
+            self.io.tool_output(f"Fetched {num_tools} tool(s) from {num_servers} server(s).")
+
+
+    def get_cached_tools_flat_list(self) -> List[Dict[str, Any]]:
+        """
+        Returns a flat list of all cached tool definitions.
+        """
+        if not self.cached_tools_by_server:
+            return []
+        
+        all_tools = []
+        for server_tools in self.cached_tools_by_server.values():
+            all_tools.extend(server_tools)
         return all_tools
+
+    def get_cached_tools_by_server(self) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+        """
+        Returns the cached tools, structured as a dictionary mapping server name to its tools.
+        """
+        return self.cached_tools_by_server
 
     def shutdown(self):
         """
