@@ -898,7 +898,7 @@ class Model(ModelSettings):
             res = requests.get("https://api.github.com/copilot_internal/v2/token", headers=headers)
             os.environ[openai_api_key] = res.json()["token"]
 
-    def send_completion(self, messages, functions, stream, temperature=None):
+    def send_completion(self, messages, functions, stream, temperature=None, tools=None):
         if os.environ.get("AIDER_SANITY_CHECK_TURNS"):
             sanity_check_messages(messages)
 
