@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
 import yaml
+import json # Added
+from aider.mcp import load_mcp_servers # Added
 
 MCP_PROFILES_YAML_PATH = Path.home() / ".aider.mcp.profiles.yml"
 
@@ -65,102 +67,55 @@ def get_known_mcp_server_names(
     mcpservers_file_arg: Optional[str],  # This is args.mcpservers_file
     io: Optional[Any]
 ) -> List[str]:
-    server_names_set = set()
-    file_encoding = 'utf-8'  # Default encoding
+    loaded_mcp_objects = []
 
-    if io and hasattr(io, 'encoding') and io.encoding:
-        file_encoding = io.encoding
-
-    # Helper to process data loaded from YAML/JSON
-    def _extract_server_names_from_data(data: Any, source_description: str):
-        
-        if not isinstance(data, dict):
-            if data is not None and io and hasattr(io, 'tool_warning'):
-                io.tool_warning(
-                    f"MCP servers config from {source_description} is not a dictionary (type:"
-                    f" {type(data)}), skipping. Expected a top-level dictionary."
-                )
-            return
-
-        mcp_servers_object = data.get("mcpServers")
-        
-        if not isinstance(mcp_servers_object, dict):
-            if mcp_servers_object is not None and io and hasattr(io, 'tool_warning'):
-                io.tool_warning(
-                    f"MCP servers config from {source_description}: 'mcpServers' key does not point to a dictionary (type:"
-                    f" {type(mcp_servers_object)}), skipping."
-                )
-            elif "mcpServers" not in data and io and hasattr(io, 'tool_warning'):
-                 io.tool_warning(
-                    f"MCP servers config from {source_description}: Missing 'mcpServers' top-level key, skipping."
-                )
-            return
-            
-        extracted_names = list(mcp_servers_object.keys())
-        for server_name in extracted_names:
-            server_names_set.add(server_name)
-        
-    # Helper to process a file path
-    def _process_file_path(file_path_str: str, source_description: str):
-        try:
-            path_obj = Path(file_path_str)
-            # Check if path_obj is None or empty string before calling expanduser
-            if not path_obj or not str(path_obj).strip():
-                if io and hasattr(io, 'tool_warning'):
-                    io.tool_warning(f"Empty file path provided for {source_description}, skipping.")
-                return
-
-            file_path = path_obj.expanduser()
-            if file_path.exists():
-                with open(file_path, 'r', encoding=file_encoding) as f:
-                    data = yaml.safe_load(f)
-                _extract_server_names_from_data(data, f"file {file_path_str}")
-            # Silently ignore if file not found
-        except yaml.YAMLError as e:
-            if io and hasattr(io, 'tool_warning'):
-                io.tool_warning(f"Error parsing MCP servers {source_description} file {file_path_str}: {e}")
-        except IOError as e:
-            if io and hasattr(io, 'tool_warning'):
-                io.tool_warning(f"Error reading MCP servers {source_description} file {file_path_str}: {e}")
-        except Exception as e:
-            if io and hasattr(io, 'tool_warning'):
-                io.tool_warning(f"Unexpected error processing MCP {source_description} file {file_path_str}: {e}")
-
-    # 1. Process mcpservers_arg (args.mcpservers)
+    # 1. Process mcpservers_arg
     if mcpservers_arg:
-        if isinstance(mcpservers_arg, dict): # Already parsed as a dict (e.g. from aider.conf.yml)
-            _extract_server_names_from_data(mcpservers_arg, "direct config (dict)")
-        elif isinstance(mcpservers_arg, str):
-            parsed_as_yaml_dict = False
+        temp_servers_from_arg = []
+        if isinstance(mcpservers_arg, dict):
             try:
-                data = yaml.safe_load(mcpservers_arg)
-                if isinstance(data, dict): # Parsed as a dict
-                    _extract_server_names_from_data(data, "direct config (YAML string)")
-                    parsed_as_yaml_dict = True
-                elif data is not None and io and hasattr(io, 'tool_warning'): # Parsed as something else
-                    io.tool_warning(
-                        f"MCP servers config from direct YAML string was not a dictionary (type: {type(data)}), skipping."
-                    )
-            except yaml.YAMLError:
-                # Not valid YAML, so it's likely a path. Fall through.
-                pass
-            
-            if not parsed_as_yaml_dict:
-                # If it wasn't parsed as a YAML dict treat the original string as a path.
-                _process_file_path(mcpservers_arg, "direct config (path)")
-        elif isinstance(mcpservers_arg, list) and io and hasattr(io, 'tool_warning'):
-             io.tool_warning(
-                f"MCP servers config from direct config was a list, skipping. Expected a dictionary."
-             )
-        # Else: other types are ignored or handled by _extract_server_names_from_data if it's a dict.
+                # Convert dict to JSON string to pass to load_mcp_servers
+                mcp_json_string = json.dumps(mcpservers_arg)
+                # Call load_mcp_servers with the JSON string
+                temp_servers_from_arg = load_mcp_servers(mcp_servers=mcp_json_string, mcp_servers_file=None, io=io, verbose=False)
+            except TypeError as e: # json.dumps might fail
+                if io and hasattr(io, 'tool_warning'):
+                    io.tool_warning(f"Could not serialize MCP servers dict to JSON: {e}")
+        elif isinstance(mcpservers_arg, str):
+            # load_mcp_servers will first try mcp_servers as a JSON string.
+            # If that doesn't yield results, we then try mcpservers_arg as a file path.
+            servers_from_json_str = load_mcp_servers(mcp_servers=mcpservers_arg, mcp_servers_file=None, io=io, verbose=False)
+            if servers_from_json_str:
+                temp_servers_from_arg = servers_from_json_str
+            else:
+                # If not a valid JSON string or it was empty, try as a file path
+                temp_servers_from_arg = load_mcp_servers(mcp_servers=None, mcp_servers_file=mcpservers_arg, io=io, verbose=False)
+        elif isinstance(mcpservers_arg, list):
+             if io and hasattr(io, 'tool_warning'):
+                io.tool_warning(
+                   f"MCP servers config from direct config was a list, skipping. Expected a dictionary or JSON string."
+                )
+        # Other types for mcpservers_arg will be implicitly ignored or handled by load_mcp_servers
 
-    # 2. Process mcpservers_file_arg (args.mcpservers_file)
+        if temp_servers_from_arg:
+            loaded_mcp_objects.extend(temp_servers_from_arg)
+
+    # 2. Process mcpservers_file_arg
     if mcpservers_file_arg:
-        _process_file_path(mcpservers_file_arg, "file arg")
-
-    final_names = list(server_names_set)
-
-    return final_names
+        # If mcpservers_arg was a path and is the same as mcpservers_file_arg,
+        # load_mcp_servers might process it again.
+        # The set operation for names at the end handles duplicates.
+        servers_from_file_arg = load_mcp_servers(mcp_servers=None, mcp_servers_file=mcpservers_file_arg, io=io, verbose=False)
+        if servers_from_file_arg:
+            loaded_mcp_objects.extend(servers_from_file_arg)
+    
+    # Extract unique names from the McpServer objects
+    server_names_set = set()
+    for server_obj in loaded_mcp_objects:
+        if hasattr(server_obj, 'name') and isinstance(server_obj.name, str) and server_obj.name:
+            server_names_set.add(server_obj.name)
+    
+    return sorted(list(server_names_set))
 
 class MCPProfileManager:
     def __init__(self, io, settings):
@@ -176,11 +131,11 @@ class MCPProfileManager:
         mcpservers_arg_val = getattr(self.settings, 'mcp_servers', None)
         mcpservers_file_arg_val = getattr(self.settings, 'mcp_servers_file', None)
 
-        current_known_server_names = sorted(list(set(get_known_mcp_server_names(
+        current_known_server_names = get_known_mcp_server_names(
             mcpservers_arg_val,
             mcpservers_file_arg_val,
             self.io
-        ))))
+        )
 
         needs_save = False
 
