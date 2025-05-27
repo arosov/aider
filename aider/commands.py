@@ -1631,13 +1631,14 @@ class Commands:
         if sub_command == "enable":
             if len(args) > 1:
                 profile_name = args[1]
-                # Placeholder for enable logic
-                self.io.tool_error(f"Subcommand 'enable {profile_name}' not yet implemented.")
+                self.mcp_profile_manager.enable_profile(profile_name, self.coder.main_model, self.coder.main_model.edit_format)
             else:
                 self.io.tool_error("Usage: /mcp enable <profile_name>")
         elif sub_command == "disable":
-            # Placeholder for disable logic
-            self.io.tool_error("Subcommand 'disable' not yet implemented.")
+            if len(args) == 1:
+                self.mcp_profile_manager.disable_profile()
+            else:
+                self.io.tool_error("Usage: /mcp disable")
         else:
             self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
             self.io.tool_output("Valid subcommands are: enable, disable")

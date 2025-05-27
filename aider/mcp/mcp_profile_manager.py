@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 import yaml
 import json # Added
 from aider.mcp import load_mcp_servers # Added
+from aider.mcp.mcp_client_pool import MCPClientPool
 
 MCP_PROFILES_YAML_PATH = Path.home() / ".aider.mcp.profiles.yml"
 
@@ -123,7 +124,7 @@ class MCPProfileManager:
         self.settings = settings
         self.profiles: Dict[str, MCPProfile] = {}
         self.active_profile_name: Optional[str] = None
-        self.active_mcp_client_pool: Optional[Any] = None # Replace Any with MCPClientPool later
+        self.active_mcp_client_pool: Optional[MCPClientPool] = None
 
     def load_or_initialize_profiles(self):
         self.profiles = load_mcp_profiles()
@@ -172,3 +173,51 @@ class MCPProfileManager:
 
     def list_profiles_details(self) -> List[Tuple[str, List[str]]]:
         return [(profile.name, profile.server_names) for profile in self.profiles.values()]
+
+    def enable_profile(self, profile_name: str, main_model, main_edit_format):
+        if self.active_profile_name == profile_name and self.active_mcp_client_pool:
+            self.io.tool_output(f"MCP profile '{profile_name}' is already active.")
+            return
+
+        if self.active_profile_name is not None:
+            self.disable_profile()
+
+        profile_to_enable = self.get_profile(profile_name)
+
+        if not profile_to_enable:
+            self.io.tool_error(f"MCP profile '{profile_name}' not found.")
+            return
+
+        if not profile_to_enable.server_names:
+            self.io.tool_warning(f"MCP profile '{profile_name}' has no servers configured. Profile enabled but no connections made.")
+            self.active_profile_name = profile_name
+            self.active_mcp_client_pool = None # Ensure it's cleared
+            return
+
+        all_server_configs = getattr(self.settings, 'mcpservers', [])
+        if not isinstance(all_server_configs, list): # Ensure it's a list if it was some other type
+            all_server_configs = []
+            
+        matched_server_configs = [s_conf for s_conf in all_server_configs if isinstance(s_conf, dict) and s_conf.get('name') in profile_to_enable.server_names]
+
+        if not matched_server_configs:
+            self.io.tool_error(f"No configured MCP servers found for profile '{profile_name}'. Check server names and .aider.conf.yml.")
+            return
+
+        self.active_mcp_client_pool = MCPClientPool(self.io, main_model, main_edit_format, matched_server_configs)
+        self.active_profile_name = profile_name
+        self.io.tool_output(f"MCP profile '{profile_name}' enabled with {len(matched_server_configs)} server(s).")
+
+    def disable_profile(self):
+        if self.active_mcp_client_pool:
+            # Assuming MCPClientPool has a shutdown method.
+            # If not, this will need to be added to MCPClientPool.
+            if hasattr(self.active_mcp_client_pool, 'shutdown') and callable(getattr(self.active_mcp_client_pool, 'shutdown')):
+                self.active_mcp_client_pool.shutdown()
+            self.active_mcp_client_pool = None
+
+        if self.active_profile_name:
+            self.io.tool_output(f"MCP profile '{self.active_profile_name}' disabled.")
+            self.active_profile_name = None
+        else:
+            self.io.tool_output("No MCP profile was active.")
