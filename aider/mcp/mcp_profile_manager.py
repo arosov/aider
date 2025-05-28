@@ -186,30 +186,42 @@ class MCPProfileManager:
         )
 
         needs_save = False
+        old_all_profile_data = self.profiles.get("all") # This is an MCPProfile object or None
 
-        old_all_profile_server_names_sorted = None
-        if "all" in self.profiles:
-            # self.profiles["all"].servers is List[Dict[str, Any]]
-            old_all_profile_server_names_sorted = sorted([s[SERVER_NAME_KEY] for s in self.profiles["all"].servers])
+        # Construct the new 'all' profile's server list, preserving no_confirm where possible
+        new_all_profile_servers_list = []
+        for s_name in current_known_server_names:
+            no_confirm_val = False # Default
+            if old_all_profile_data:
+                # Check if this server was in the old 'all' profile
+                existing_server_config = next(
+                    (s_conf for s_conf in old_all_profile_data.servers if s_conf.get(SERVER_NAME_KEY) == s_name),
+                    None
+                )
+                if existing_server_config:
+                    no_confirm_val = existing_server_config.get(SERVER_NO_CONFIRM_KEY, False)
+            new_all_profile_servers_list.append({SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: no_confirm_val})
+        
+        # Sort for consistent comparison later
+        new_all_profile_servers_list_sorted = sorted(new_all_profile_servers_list, key=lambda x: x[SERVER_NAME_KEY])
 
-        # Create/Update the 'all' profile in the in-memory dictionary to match current reality.
-        # This ensures self.profiles["all"] is always up-to-date after this step.
-        current_servers_as_dicts = [{SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: False} for s_name in current_known_server_names]
-        self.profiles["all"] = MCPProfile(name="all", servers=current_servers_as_dicts)
+        # Create/Update the 'all' profile in the in-memory dictionary
+        self.profiles["all"] = MCPProfile(name="all", servers=new_all_profile_servers_list_sorted)
 
-        if old_all_profile_server_names_sorted is None:
+        if old_all_profile_data is None:
             # The 'all' profile was not in the loaded file, so we created it.
             needs_save = True
             if self.io and hasattr(self.io, 'tool_output'):
                 self.io.tool_output("Initialized default MCP profile 'all'.")
-        elif old_all_profile_server_names_sorted != current_known_server_names: # Compare with sorted list of names
-            # The 'all' profile was in the loaded file, but its servers differed from current reality.
-            needs_save = True
-            if self.io and hasattr(self.io, 'tool_output'):
-                self.io.tool_output("Updated MCP profile 'all' with current server configurations.")
-        # If old_all_profile_server_names_sorted == current_known_server_names, then the loaded 'all' profile
-        # was already correct. No message, needs_save remains False.
-
+        else:
+            # The 'all' profile was in the loaded file. Check if it changed.
+            # Sort old server data for consistent comparison
+            old_all_profile_servers_list_sorted = sorted(old_all_profile_data.servers, key=lambda x: x[SERVER_NAME_KEY])
+            if old_all_profile_servers_list_sorted != new_all_profile_servers_list_sorted:
+                needs_save = True
+                if self.io and hasattr(self.io, 'tool_output'):
+                    self.io.tool_output("Updated MCP profile 'all' with current server configurations (names or no_confirm values changed).")
+        
         if needs_save:
             save_mcp_profiles(self.profiles)
 
