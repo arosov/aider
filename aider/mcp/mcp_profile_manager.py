@@ -222,6 +222,25 @@ class MCPProfileManager:
     def list_profiles_details(self) -> List[Tuple[str, List[Dict[str, Any]]]]:
         return [(profile.name, profile.servers) for profile in self.profiles.values()]
 
+    def is_server_no_confirm(self, server_name_to_check: str) -> bool:
+        """
+        Checks if a specific server in the currently active profile is set to 'no_confirm'.
+        Defaults to False (meaning, confirmation is required) if the profile is not active,
+        the server is not found in the profile, or 'no_confirm' is not set/False.
+        """
+        if not self.active_profile_name:
+            return False
+
+        active_profile = self.get_profile(self.active_profile_name)
+        if not active_profile:
+            return False
+
+        for server_config in active_profile.servers:
+            if server_config.get(SERVER_NAME_KEY) == server_name_to_check:
+                return server_config.get(SERVER_NO_CONFIRM_KEY, False)
+        
+        return False # Server not found in profile or no_confirm not set
+
     def get_tool_prompt_if_active(self) -> Optional[str]:
         """
         Returns the standard tool prompt string if an MCP profile is active,

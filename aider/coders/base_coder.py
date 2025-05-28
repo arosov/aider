@@ -1665,18 +1665,52 @@ class Coder:
         if server_tool_calls_map and self.num_tool_calls < self.max_tool_calls:
             self._print_tool_call_info(server_tool_calls_map)
 
-            if self.io.confirm_ask("Run tools?"):
-                tool_responses = self._execute_tool_calls(server_tool_calls_map)
+            approved_server_tool_calls_map: Dict[McpServer, List[Any]] = {}
+            any_tool_cancelled = False
 
-                # Add the assistant message with tool calls
-                # Converting to a dict so it can be safely dumped to json
+            for mcp_server_instance, tool_calls_for_server in server_tool_calls_map.items():
+                server_name = mcp_server_instance.name
+                server_no_confirm = False # Default to needing confirmation
+
+                if self.mcp_profile_manager:
+                    server_no_confirm = self.mcp_profile_manager.is_server_no_confirm(server_name)
+
+                proceed_for_this_server = False
+                if server_no_confirm:
+                    proceed_for_this_server = True
+                else:
+                    if self.io.confirm_ask(f"Run tools for server '{server_name}'?"):
+                        proceed_for_this_server = True
+                    else:
+                        self.io.tool_output(f"Tool execution for server '{server_name}' cancelled by user.")
+                        any_tool_cancelled = True
+                
+                if proceed_for_this_server:
+                    approved_server_tool_calls_map[mcp_server_instance] = tool_calls_for_server
+
+            if approved_server_tool_calls_map:
+                tool_responses = self._execute_tool_calls(approved_server_tool_calls_map)
+
+                # Add the assistant message with ALL original tool calls
+                # (even if some were cancelled, the LLM requested them)
                 self.cur_messages.append(tool_call_response.choices[0].message.to_dict())
 
-                # Add all tool responses
+                # Add responses only for the tools that were actually executed
                 for tool_response in tool_responses:
                     self.cur_messages.append(tool_response)
+                
+                return True # Indicates that some tools were processed or attempted
+            elif any_tool_cancelled:
+                # All tools were cancelled by the user, but we should still record the LLM's attempt
+                self.cur_messages.append(tool_call_response.choices[0].message.to_dict())
+                # Add a generic response indicating cancellation if needed, or just return False
+                # For now, returning False implies no *successful* tool execution path was taken.
+                return False 
+            else:
+                # No tools to execute (e.g., map was empty initially, or all were filtered out for other reasons)
+                return False
 
-                return True
+
         elif self.num_tool_calls >= self.max_tool_calls:
             self.io.tool_warning(f"Only {self.max_tool_calls} tool calls allowed, stopping.")
             return False
