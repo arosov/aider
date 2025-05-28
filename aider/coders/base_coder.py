@@ -127,7 +127,6 @@ class Coder:
     ignore_mentions = None
     chat_language = None
     file_watcher = None
-    mcp_servers = None
     mcp_tools = None
     mcp_profile_manager = None
 
@@ -197,11 +196,6 @@ class Coder:
 
             kwargs = use_kwargs
             from_coder.ok_to_warm_cache = False
-
-        # Ensure 'mcp_servers' is not passed as it's no longer a valid argument for Coder.__init__.
-        # This applies whether kwargs come from from_coder or directly to Coder.create.
-        if 'mcp_servers' in kwargs:
-            del kwargs['mcp_servers']
 
         for coder in coders.__all__:
             if hasattr(coder, "edit_format") and coder.edit_format == edit_format:
@@ -352,7 +346,6 @@ class Coder:
         file_watcher=None,
         auto_copy_context=False,
         auto_accept_architect=True,
-        # mcp_servers is no longer used directly by BaseCoder for initialization
         mcp_profile_manager=None,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
@@ -381,7 +374,6 @@ class Coder:
         self.detect_urls = detect_urls
 
         self.num_cache_warming_pings = num_cache_warming_pings
-        # self.mcp_servers = mcp_servers # No longer stored directly for initialization
 
         if not fnames:
             fnames = []
@@ -1664,7 +1656,7 @@ class Coder:
         llm_tool_calls = tool_call_response.choices[0].message.tool_calls
         if not llm_tool_calls:
             return False
-            
+
         # Collect all tool calls grouped by server
         # The keys of server_tool_calls are McpServer instances
         server_tool_calls_map = self._gather_server_tool_calls(llm_tool_calls)
@@ -1716,7 +1708,7 @@ class Coder:
 
         if not self.mcp_profile_manager or not self.mcp_profile_manager.active_mcp_client_pool:
             return gathered_calls
-        
+
         active_pool = self.mcp_profile_manager.active_mcp_client_pool
         # tools_by_server is Dict[server_name, List[tool_definition_dict]]
         tools_by_server = active_pool.get_cached_tools_by_server()
@@ -1740,7 +1732,7 @@ class Coder:
                             break # Found the definition for this llm_tc, move to next llm_tc
                 if found_tool_for_llm_tc:
                     break # Moved to next llm_tc
-        
+
         return gathered_calls
 
     def _execute_tool_calls(self, server_tool_calls_map: Dict[McpServer, List[Any]]):
@@ -1792,7 +1784,7 @@ class Coder:
                     # Potentially add a generic error tool_response for all tools in this batch
                 elif isinstance(server_batch_result, list):
                     tool_responses.extend(server_batch_result)
-        
+
         return tool_responses
 
     def get_tool_list(self) -> List[Dict[str, Any]]:
