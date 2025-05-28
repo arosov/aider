@@ -1031,22 +1031,41 @@ class InputOutput:
 
     def tool_output(self, *messages, log_only=False, bold=False):
         if messages:
-            hist = " ".join(messages)
+            hist_parts = []
+            for m in messages:
+                if isinstance(m, Text):
+                    hist_parts.append(m.plain)
+                else:
+                    hist_parts.append(str(m))
+            hist = " ".join(hist_parts)
             hist = f"{hist.strip()}"
             self.append_chat_history(hist, linebreak=True, blockquote=True)
 
         if log_only:
             return
 
-        messages = list(map(Text, messages))
-        style = dict()
+        processed_messages = []
+        for m in messages:
+            if not isinstance(m, Text):
+                # If m is a string, parse it for Rich markup
+                processed_messages.append(Text.from_markup(str(m)))
+            else:
+                # If m is already a Text object, use it as is
+                processed_messages.append(m)
+        
+        style_args = {}
         if self.pretty:
             if self.tool_output_color:
-                style["color"] = ensure_hash_prefix(self.tool_output_color)
-            style["reverse"] = bold
+                style_args["color"] = ensure_hash_prefix(self.tool_output_color)
+            if bold: # bold is a boolean, reverse is the RichStyle attribute
+                style_args["reverse"] = True
+        
+        style = RichStyle(**style_args) if style_args else None
 
-        style = RichStyle(**style)
-        self.console.print(*messages, style=style)
+        if style:
+            self.console.print(*processed_messages, style=style)
+        else:
+            self.console.print(*processed_messages)
 
     def get_assistant_mdstream(self):
         mdargs = dict(style=self.assistant_output_color, code_theme=self.code_theme)
