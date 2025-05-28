@@ -127,7 +127,6 @@ class Coder:
     ignore_mentions = None
     chat_language = None
     file_watcher = None
-    mcp_tools = None
     mcp_profile_manager = None
 
     @classmethod
@@ -1222,7 +1221,7 @@ class Coder:
         else:
             quad_backtick_reminder = ""
 
-        if self.mcp_tools and len(self.mcp_tools) > 0:
+        if self.mcp_profile_manager and self.mcp_profile_manager.active_profile_name:
             final_reminders.append(self.gpt_prompts.tool_prompt)
 
         final_reminders = "\n\n".join(final_reminders)
