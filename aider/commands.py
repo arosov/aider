@@ -13,6 +13,13 @@ from PIL import Image, ImageGrab
 from prompt_toolkit.completion import Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.shortcuts import checkboxlist_dialog
+from prompt_toolkit.shortcuts.dialogs import Dialog, Button
+from prompt_toolkit.layout.containers import VSplit, HSplit, Window
+from prompt_toolkit.widgets import Checkbox, Label
+from prompt_toolkit.layout.dimension import D
+from prompt_toolkit.application import Application, get_app
+from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.key_binding import KeyBindings
 
 from aider import models, prompts, voice
 from aider.editor import pipe_editor
