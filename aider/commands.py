@@ -1604,9 +1604,10 @@ class Commands:
             profiles_details = self.mcp_profile_manager.list_profiles_details()
             self.io.tool_output("Available MCP profiles:")
             if profiles_details:
-                for name, servers in profiles_details:
+                for name, server_configs in profiles_details:
+                    server_names_list = [s_conf.get("name", "UnknownServer") for s_conf in server_configs]
                     self.io.tool_output(
-                        f"  - {name}: {', '.join(servers) if servers else ' (no servers)'}"
+                        f"  - {name}: {', '.join(server_names_list) if server_names_list else ' (no servers)'}"
                     )
             else:
                 self.io.tool_output("  (No profiles defined)")

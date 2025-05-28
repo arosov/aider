@@ -11,10 +11,19 @@ from aider.coders.base_prompts import CoderPrompts
 
 MCP_PROFILES_YAML_PATH = Path.home() / ".aider.mcp.profiles.yml"
 
+# Constants for YAML keys
+PROFILE_NAME_KEY = "name"
+PROFILE_SERVERS_KEY = "servers"
+SERVER_NAME_KEY = "name"
+SERVER_NO_CONFIRM_KEY = "no_confirm"
+# Old key, for removal during load if present
+OLD_PROFILE_SERVER_NAMES_KEY = "server_names"
+
+
 @dataclass
 class MCPProfile:
     name: str
-    server_names: List[str]
+    servers: List[Dict[str, Any]] # Each dict: {'name': str, 'no_confirm': bool}
 
 def load_mcp_profiles() -> Dict[str, MCPProfile]:
     try:
@@ -27,22 +36,57 @@ def load_mcp_profiles() -> Dict[str, MCPProfile]:
                     print(f"Warning: Skipping non-dictionary profile entry: {profile_dict}")
                     continue
                 try:
-                    # Ensure server_names is a list.
-                    loaded_server_names = profile_dict.get('server_names')
-                    if not isinstance(loaded_server_names, list):
-                        profile_name = profile_dict.get('name', 'UnknownProfile')
-                        if loaded_server_names is not None: # Log if it was present but wrong type
-                            print(
-                                f"Warning: 'server_names' for profile '{profile_name}' is not a list"
-                                f" (type: {type(loaded_server_names)}). Initializing as empty list."
-                            )
-                        profile_dict['server_names'] = [] # Default to empty list
+                    # Ensure servers is a list of dicts with name and no_confirm.
+                    loaded_servers_data = profile_dict.get(PROFILE_SERVERS_KEY)
+                    parsed_servers_list = []
+                    profile_name_for_error = profile_dict.get(PROFILE_NAME_KEY, 'UnknownProfile')
 
-                    profile = MCPProfile(**profile_dict)
+                    if isinstance(loaded_servers_data, list):
+                        for server_entry in loaded_servers_data:
+                            if isinstance(server_entry, str):
+                                parsed_servers_list.append({SERVER_NAME_KEY: server_entry, SERVER_NO_CONFIRM_KEY: False})
+                            elif isinstance(server_entry, dict):
+                                s_name = server_entry.get(SERVER_NAME_KEY)
+                                if not isinstance(s_name, str) or not s_name:
+                                    print(f"Warning: Server entry in profile '{profile_name_for_error}' is missing a valid '{SERVER_NAME_KEY}': {server_entry}. Skipping this server.")
+                                    continue
+                                s_no_confirm = server_entry.get(SERVER_NO_CONFIRM_KEY, False)
+                                if not isinstance(s_no_confirm, bool):
+                                    print(f"Warning: '{SERVER_NO_CONFIRM_KEY}' for server '{s_name}' in profile '{profile_name_for_error}' is not a boolean (type: {type(s_no_confirm)}). Defaulting to False.")
+                                    s_no_confirm = False
+                                parsed_servers_list.append({SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: s_no_confirm})
+                            else:
+                                print(f"Warning: Invalid server entry type in profile '{profile_name_for_error}': {server_entry} (type: {type(server_entry)}). Skipping this server.")
+                                continue
+                    elif loaded_servers_data is not None: # It was present but not a list
+                        print(
+                            f"Warning: '{PROFILE_SERVERS_KEY}' for profile '{profile_name_for_error}' is not a list"
+                            f" (type: {type(loaded_servers_data)}). Initializing as empty list."
+                        )
+                        # parsed_servers_list remains empty
+
+                    profile_dict[PROFILE_SERVERS_KEY] = parsed_servers_list # Store the parsed list
+                    if OLD_PROFILE_SERVER_NAMES_KEY in profile_dict: # Remove old key if present for clean object creation
+                        del profile_dict[OLD_PROFILE_SERVER_NAMES_KEY]
+                    
+                    # Ensure 'name' key is present for MCPProfile dataclass
+                    if PROFILE_NAME_KEY not in profile_dict:
+                        print(f"Warning: Profile entry is missing '{PROFILE_NAME_KEY}': {profile_dict}. Skipping this profile.")
+                        continue
+
+
+                    # Rename 'servers' to 'servers' for MCPProfile dataclass if needed (already done by key const)
+                    # profile_dict_for_dataclass = {
+                    #     'name': profile_dict[PROFILE_NAME_KEY],
+                    #     'servers': profile_dict[PROFILE_SERVERS_KEY]
+                    # }
+
+
+                    profile = MCPProfile(**profile_dict) 
                     profiles[profile.name] = profile
-                except TypeError as e: # Catches issues like missing 'name' or other fields
-                    profile_name_for_error = profile_dict.get('name', str(profile_dict))
-                    print(f"Warning: Skipping malformed profile entry for '{profile_name_for_error}': {e}")
+                except TypeError as e: # Catches issues like missing 'name' or other fields for MCPProfile
+                    profile_name_display = profile_dict.get(PROFILE_NAME_KEY, str(profile_dict))
+                    print(f"Warning: Skipping malformed profile entry for '{profile_name_display}': {e}")
             return profiles
         elif profiles_data is None: # File is empty
             return {}
@@ -145,19 +189,20 @@ class MCPProfileManager:
 
         old_all_profile_server_names_sorted = None
         if "all" in self.profiles:
-            # self.profiles["all"].server_names is guaranteed to be a list by robust load_mcp_profiles
-            old_all_profile_server_names_sorted = sorted(self.profiles["all"].server_names)
+            # self.profiles["all"].servers is List[Dict[str, Any]]
+            old_all_profile_server_names_sorted = sorted([s[SERVER_NAME_KEY] for s in self.profiles["all"].servers])
 
         # Create/Update the 'all' profile in the in-memory dictionary to match current reality.
         # This ensures self.profiles["all"] is always up-to-date after this step.
-        self.profiles["all"] = MCPProfile(name="all", server_names=current_known_server_names)
+        current_servers_as_dicts = [{SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: False} for s_name in current_known_server_names]
+        self.profiles["all"] = MCPProfile(name="all", servers=current_servers_as_dicts)
 
         if old_all_profile_server_names_sorted is None:
             # The 'all' profile was not in the loaded file, so we created it.
             needs_save = True
             if self.io and hasattr(self.io, 'tool_output'):
                 self.io.tool_output("Initialized default MCP profile 'all'.")
-        elif old_all_profile_server_names_sorted != current_known_server_names:
+        elif old_all_profile_server_names_sorted != current_known_server_names: # Compare with sorted list of names
             # The 'all' profile was in the loaded file, but its servers differed from current reality.
             needs_save = True
             if self.io and hasattr(self.io, 'tool_output'):
@@ -174,8 +219,8 @@ class MCPProfileManager:
     def list_profile_names(self) -> List[str]:
         return list(self.profiles.keys())
 
-    def list_profiles_details(self) -> List[Tuple[str, List[str]]]:
-        return [(profile.name, profile.server_names) for profile in self.profiles.values()]
+    def list_profiles_details(self) -> List[Tuple[str, List[Dict[str, Any]]]]:
+        return [(profile.name, profile.servers) for profile in self.profiles.values()]
 
     def get_tool_prompt_if_active(self) -> Optional[str]:
         """
@@ -200,7 +245,8 @@ class MCPProfileManager:
             self.io.tool_error(f"MCP profile '{profile_name}' not found.")
             return
 
-        if not profile_to_enable.server_names:
+        server_configs_in_profile = profile_to_enable.servers
+        if not server_configs_in_profile:
             self.io.tool_warning(f"MCP profile '{profile_name}' has no servers configured. Profile enabled but no connections made.")
             self.active_profile_name = profile_name
             self.active_mcp_client_pool = None # Ensure it's cleared
@@ -219,9 +265,10 @@ class MCPProfileManager:
         )
 
         # Filter these McpServer objects by name and get their config dictionaries
+        profile_server_names = [s_conf[SERVER_NAME_KEY] for s_conf in server_configs_in_profile]
         matched_server_configs = [
             s_obj.config for s_obj in all_mcp_server_objects
-            if s_obj.name in profile_to_enable.server_names
+            if s_obj.name in profile_server_names
         ]
 
         if not matched_server_configs:
