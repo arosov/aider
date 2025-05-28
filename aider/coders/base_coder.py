@@ -1681,21 +1681,21 @@ class Coder:
             self.io.tool_warning(f"Only {self.max_tool_calls} tool calls allowed, stopping.")
             return False
 
-    def _print_tool_call_info(self, server_tool_calls):
-        """Print information about an MCP tool call."""
-        self.io.tool_output("Preparing to run MCP tools", bold=True)
-
-        for server, tool_calls in server_tool_calls.items():
+    def _print_tool_call_info(self, server_tool_calls_map):
+        """Print information about an MCP tool call on a single line."""
+        for server, tool_calls in server_tool_calls_map.items():
             for tool_call in tool_calls:
-                self.io.tool_output(f"Tool Call: {tool_call.function.name}")
-                self.io.tool_output(f"Arguments: {tool_call.function.arguments}")
-                self.io.tool_output(f"MCP Server: {server.name}")
+                output_str = (
+                    f"[reverse][bold]MCP[/bold][/reverse] [yellow]{server.name}:"
+                    f" {tool_call.function.name}[/yellow] ({tool_call.function.arguments})"
+                )
+                self.io.tool_output(output_str)
 
                 if self.verbose:
-                    self.io.tool_output(f"Tool ID: {tool_call.id}")
-                    self.io.tool_output(f"Tool type: {tool_call.type}")
-
-                self.io.tool_output("\n")
+                    self.io.tool_output(
+                        f"  (Verbose: ID={tool_call.id}, Type={tool_call.type})"
+                    )
+        self.io.tool_output("") # Add a newline after all tool call infos
 
     def _gather_server_tool_calls(self, llm_tool_calls: List[Any]) -> Dict[McpServer, List[Any]]:
         """Collect all tool calls grouped by McpServer instance.
