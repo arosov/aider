@@ -13,13 +13,6 @@ from PIL import Image, ImageGrab
 from prompt_toolkit.completion import Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.shortcuts import checkboxlist_dialog
-from prompt_toolkit.shortcuts.dialogs import Dialog, Button
-from prompt_toolkit.layout.containers import VSplit, HSplit, Window
-from prompt_toolkit.widgets import Checkbox, Label
-from prompt_toolkit.layout.dimension import D
-from prompt_toolkit.application import Application, get_app
-from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.key_binding import KeyBindings
 
 from aider import models, prompts, voice
 from aider.editor import pipe_editor
@@ -1662,70 +1655,32 @@ class Commands:
                     return
 
                 # Second dialog: Configure no_confirm for selected servers
-                no_confirm_checkboxes = [Checkbox() for _ in selected_server_names]
-                dialog_body_elements = []
-                for i, server_name in enumerate(selected_server_names):
-                    dialog_body_elements.append(
-                        HSplit(
-                            [
-                                Label(text=f"{server_name:<30}"), # Adjust width as needed
-                                Label(text="No Confirm:"),
-                                no_confirm_checkboxes[i],
-                            ]
-                        )
+                no_confirm_choices = [(name, name) for name in selected_server_names]
+                
+                # checkboxlist_dialog returns None if Cancel is chosen
+                servers_for_no_confirm = checkboxlist_dialog(
+                    title=f"Create MCP Profile: {profile_name} (Step 2/2)",
+                    text="Select servers that should NOT require confirmation for tool use:",
+                    values=no_confirm_choices,
+                ).run()
+                
+                # If the second dialog was cancelled, treat it as cancelling the whole operation
+                if servers_for_no_confirm is None:
+                    self.io.tool_output("Profile creation cancelled during no_confirm configuration.")
+                    return
+
+                final_selected_servers_config = []
+                for server_name in selected_server_names:
+                    final_selected_servers_config.append(
+                        {
+                            "name": server_name,
+                            "no_confirm": server_name in servers_for_no_confirm,
+                        }
                     )
                 
-                dialog_content = VSplit(dialog_body_elements, padding=1)
+                self.mcp_profile_manager.create_new_profile(profile_name, final_selected_servers_config)
+                self.io.tool_output(f"MCP profile '{profile_name}' created with {len(final_selected_servers_config)} server(s).")
 
-                def ok_handler_no_confirm():
-                    servers_with_no_confirm_config = []
-                    for i, server_name in enumerate(selected_server_names):
-                        servers_with_no_confirm_config.append(
-                            {
-                                "name": server_name,
-                                "no_confirm": no_confirm_checkboxes[i].checked,
-                            }
-                        )
-                    return servers_with_no_confirm_config
-
-                def final_ok_handler_no_confirm():
-                    selected_config = ok_handler_no_confirm()
-                    get_app().exit(result=selected_config)
-
-                def final_cancel_handler_no_confirm():
-                    get_app().exit(result=None)
-
-                dialog_container_no_confirm = Dialog(
-                    title=f"Create MCP Profile: {profile_name} (Step 2/2)",
-                    body=dialog_content,
-                    buttons=[
-                        Button(text="OK", handler=final_ok_handler_no_confirm),
-                        Button(text="Cancel", handler=final_cancel_handler_no_confirm),
-                    ],
-                    width=D(preferred=80), # Adjust width as needed
-                )
-
-                kb_no_confirm = KeyBindings()
-                @kb_no_confirm.add("escape", eager=True)
-                @kb_no_confirm.add("c-c", eager=True)
-                @kb_no_confirm.add("c-q", eager=True)
-                def _(event):
-                    event.app.exit(result=None)
-
-                application_no_confirm = Application(
-                    layout=Layout(dialog_container_no_confirm),
-                    key_bindings=kb_no_confirm,
-                    mouse_support=True,
-                    full_screen=True,
-                )
-                
-                final_selected_servers_config = application_no_confirm.run()
-
-                if final_selected_servers_config:
-                    self.mcp_profile_manager.create_new_profile(profile_name, final_selected_servers_config)
-                    self.io.tool_output(f"MCP profile '{profile_name}' created with {len(final_selected_servers_config)} server(s).")
-                else:
-                    self.io.tool_output("Profile creation cancelled during no_confirm configuration.")
             else:
                 self.io.tool_error("Usage: /mcp new <profile_name>")
 
