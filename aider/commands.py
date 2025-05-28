@@ -12,6 +12,7 @@ import pyperclip
 from PIL import Image, ImageGrab
 from prompt_toolkit.completion import Completion, PathCompleter
 from prompt_toolkit.document import Document
+from prompt_toolkit.shortcuts import checkboxlist_dialog
 
 from aider import models, prompts, voice
 from aider.editor import pipe_editor
@@ -1619,17 +1620,45 @@ class Commands:
                 self.io.tool_output("\nNo MCP profile is currently active.")
 
             self.io.tool_output("\nCommands:")
+            self.io.tool_output("  /mcp new <profile_name>     - Create a new MCP profile")
             self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
             self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
             # Add more subcommands as they are implemented
-            # self.io.tool_output("  /mcp create <profile_name> [server_name ...]")
             # self.io.tool_output("  /mcp delete <profile_name>")
             # self.io.tool_output("  /mcp add <profile_name> <server_name>")
             # self.io.tool_output("  /mcp remove <profile_name> <server_name>")
             return
 
         sub_command = args[0]
-        if sub_command == "enable":
+        if sub_command == "new":
+            if len(args) > 1:
+                profile_name = args[1]
+                if self.mcp_profile_manager.get_profile(profile_name):
+                    self.io.tool_error(f"Profile '{profile_name}' already exists.")
+                    return
+
+                known_server_names = self.mcp_profile_manager.get_known_server_names()
+                if not known_server_names:
+                    self.io.tool_error("No MCP servers found. Configure servers first (e.g., in .aider.conf.yml).")
+                    return
+
+                dialog_choices = [(name, name) for name in known_server_names]
+
+                selected_servers = checkboxlist_dialog(
+                    title=f"Create MCP Profile: {profile_name}",
+                    text="Select servers to include in this profile:",
+                    values=dialog_choices,
+                ).run()
+
+                if selected_servers:
+                    self.mcp_profile_manager.create_new_profile(profile_name, selected_servers)
+                    self.io.tool_output(f"MCP profile '{profile_name}' created with {len(selected_servers)} server(s).")
+                else:
+                    self.io.tool_output("No servers selected. Profile not created.")
+            else:
+                self.io.tool_error("Usage: /mcp new <profile_name>")
+
+        elif sub_command == "enable":
             if len(args) > 1:
                 profile_name = args[1]
                 self.mcp_profile_manager.enable_profile(profile_name, self.coder.main_model, self.coder.main_model.edit_format)
@@ -1642,7 +1671,7 @@ class Commands:
                 self.io.tool_error("Usage: /mcp disable")
         else:
             self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
-            self.io.tool_output("Valid subcommands are: enable, disable")
+            self.io.tool_output("Valid subcommands are: new, enable, disable")
 
 
     def cmd_copy_context(self, args=None):

@@ -234,6 +234,31 @@ class MCPProfileManager:
     def list_profiles_details(self) -> List[Tuple[str, List[Dict[str, Any]]]]:
         return [(profile.name, profile.servers) for profile in self.profiles.values()]
 
+    def get_known_server_names(self) -> List[str]:
+        """Helper to get current known server names based on settings."""
+        mcpservers_arg_val = getattr(self.settings, 'mcp_servers', None)
+        mcpservers_file_arg_val = getattr(self.settings, 'mcp_servers_file', None)
+        return get_known_mcp_server_names(
+            mcpservers_arg_val,
+            mcpservers_file_arg_val,
+            self.io
+        )
+
+    def create_new_profile(self, profile_name: str, selected_server_names: List[str]):
+        if profile_name in self.profiles:
+            self.io.tool_error(f"Profile '{profile_name}' already exists. Cannot create.")
+            return
+
+        servers_config_list = []
+        for server_name in selected_server_names:
+            servers_config_list.append({SERVER_NAME_KEY: server_name, SERVER_NO_CONFIRM_KEY: False})
+        
+        new_profile = MCPProfile(name=profile_name, servers=servers_config_list)
+        self.profiles[profile_name] = new_profile
+        save_mcp_profiles(self.profiles)
+        self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
+
+
     def is_server_no_confirm(self, server_name_to_check: str) -> bool:
         """
         Checks if a specific server in the currently active profile is set to 'no_confirm'.
