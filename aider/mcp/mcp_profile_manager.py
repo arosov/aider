@@ -6,6 +6,8 @@ import yaml
 import json # Added
 from aider.mcp import load_mcp_servers # Added
 from aider.mcp.mcp_client_pool import MCPClientPool
+from aider.coders.base_prompts import CoderPrompts
+
 
 MCP_PROFILES_YAML_PATH = Path.home() / ".aider.mcp.profiles.yml"
 
@@ -174,6 +176,15 @@ class MCPProfileManager:
 
     def list_profiles_details(self) -> List[Tuple[str, List[str]]]:
         return [(profile.name, profile.server_names) for profile in self.profiles.values()]
+
+    def get_tool_prompt_if_active(self) -> Optional[str]:
+        """
+        Returns the standard tool prompt string if an MCP profile is active,
+        otherwise None.
+        """
+        if self.active_profile_name:
+            return CoderPrompts.tool_prompt
+        return None
 
     def enable_profile(self, profile_name: str, main_model, main_edit_format):
         if self.active_profile_name == profile_name and self.active_mcp_client_pool:

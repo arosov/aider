@@ -1221,8 +1221,10 @@ class Coder:
         else:
             quad_backtick_reminder = ""
 
-        if self.mcp_profile_manager and self.mcp_profile_manager.active_profile_name:
-            final_reminders.append(self.gpt_prompts.tool_prompt)
+        if self.mcp_profile_manager:
+            tool_prompt_from_mcp = self.mcp_profile_manager.get_tool_prompt_if_active()
+            if tool_prompt_from_mcp:
+                final_reminders.append(tool_prompt_from_mcp)
 
         final_reminders = "\n\n".join(final_reminders)
 
