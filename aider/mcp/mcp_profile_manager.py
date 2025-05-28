@@ -244,16 +244,15 @@ class MCPProfileManager:
             self.io
         )
 
-    def create_new_profile(self, profile_name: str, selected_server_names: List[str]):
+    def create_new_profile(self, profile_name: str, selected_servers_config: List[Dict[str, Any]]):
         if profile_name in self.profiles:
             self.io.tool_error(f"Profile '{profile_name}' already exists. Cannot create.")
             return
 
-        servers_config_list = []
-        for server_name in selected_server_names:
-            servers_config_list.append({SERVER_NAME_KEY: server_name, SERVER_NO_CONFIRM_KEY: False})
+        # selected_servers_config is already in the format: [{'name': str, 'no_confirm': bool}, ...]
+        # So, we can use it directly.
         
-        new_profile = MCPProfile(name=profile_name, servers=servers_config_list)
+        new_profile = MCPProfile(name=profile_name, servers=selected_servers_config)
         self.profiles[profile_name] = new_profile
         save_mcp_profiles(self.profiles)
         self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
