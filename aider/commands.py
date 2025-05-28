@@ -1623,8 +1623,8 @@ class Commands:
             self.io.tool_output("  /mcp new <profile_name>     - Create a new MCP profile")
             self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
             self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
+            self.io.tool_output("  /mcp rm <profile_name>      - Delete an MCP profile")
             # Add more subcommands as they are implemented
-            # self.io.tool_output("  /mcp delete <profile_name>")
             # self.io.tool_output("  /mcp add <profile_name> <server_name>")
             # self.io.tool_output("  /mcp remove <profile_name> <server_name>")
             return
@@ -1695,9 +1695,15 @@ class Commands:
                 self.mcp_profile_manager.disable_profile()
             else:
                 self.io.tool_error("Usage: /mcp disable")
+        elif sub_command == "rm":
+            if len(args) > 1:
+                profile_name = args[1]
+                self.mcp_profile_manager.delete_profile(profile_name)
+            else:
+                self.io.tool_error("Usage: /mcp rm <profile_name>")
         else:
             self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
-            self.io.tool_output("Valid subcommands are: new, enable, disable")
+            self.io.tool_output("Valid subcommands are: new, enable, disable, rm")
 
 
     def cmd_copy_context(self, args=None):

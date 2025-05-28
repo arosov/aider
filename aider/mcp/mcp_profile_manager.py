@@ -257,6 +257,21 @@ class MCPProfileManager:
         save_mcp_profiles(self.profiles)
         self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
 
+    def delete_profile(self, profile_name: str):
+        if profile_name == "all":
+            self.io.tool_error("The 'all' profile cannot be deleted.")
+            return
+
+        if profile_name not in self.profiles:
+            self.io.tool_error(f"Profile '{profile_name}' not found.")
+            return
+
+        if self.active_profile_name == profile_name:
+            self.disable_profile() # Ensure it's disabled if it was active
+
+        del self.profiles[profile_name]
+        save_mcp_profiles(self.profiles)
+        self.io.tool_output(f"MCP profile '{profile_name}' deleted.")
 
     def is_server_no_confirm(self, server_name_to_check: str) -> bool:
         """
