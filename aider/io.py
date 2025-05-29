@@ -146,18 +146,66 @@ class AutoCompleter(Completer):
             )
 
     def get_command_completions(self, document, complete_event, text, words):
-        if len(words) == 1 and not text[-1].isspace():
-            partial = words[0].lower()
-            candidates = [cmd for cmd in self.command_names if cmd.startswith(partial)]
+        if len(words) == 1 and not text[-1].isspace(): # Completing the command itself
+            partial_cmd = words[0].lower()
+            # Ensure self.command_names is populated
+            if not hasattr(self, 'command_names') or not self.command_names:
+                 if self.commands:
+                    self.command_names = self.commands.get_commands()
+                 else:
+                    self.command_names = []
+
+            candidates = [cmd for cmd in self.command_names if cmd.startswith(partial_cmd)]
             for candidate in sorted(candidates):
-                yield Completion(candidate, start_position=-len(words[-1]))
+                yield Completion(candidate, start_position=-len(words[0]))
             return
 
-        if len(words) <= 1 or text[-1].isspace():
-            return
-
+        # If we are here, words[0] is a complete command.
+        # We are completing arguments for words[0].
         cmd = words[0]
-        partial = words[-1].lower()
+        
+        # If text ends with a space, or no partial word to complete
+        if text[-1].isspace() or len(words) == 1 :
+            partial_arg = ""
+        else: # We are completing the current (last) word as an argument
+            partial_arg = words[-1].lower()
+
+        # Special handling for /mcp
+        if cmd == "/mcp":
+            if len(words) == 2 and not text[-1].isspace(): # Completing the subcommand (enable/disable)
+                subcommands = ["enable", "disable"]
+                for sub_cmd_candidate in subcommands:
+                    if sub_cmd_candidate.startswith(partial_arg):
+                        yield Completion(sub_cmd_candidate, start_position=-len(words[-1]))
+                return
+            elif (len(words) == 2 and text[-1].isspace()) or \
+                 (len(words) == 1 and text[-1].isspace()): # Suggesting subcommand after "/mcp "
+                subcommands = ["enable", "disable"]
+                for sub_cmd_candidate in subcommands:
+                    yield Completion(sub_cmd_candidate, start_position=0)
+                return
+            elif len(words) >= 2 and words[1] == "enable":
+                # Completing profile name for "/mcp enable <profile_partial>"
+                # Or suggesting profile names after "/mcp enable "
+                if self.commands and self.commands.mcp_profile_manager:
+                    profile_names = self.commands.mcp_profile_manager.list_profile_names()
+                    for profile_name in profile_names:
+                        if profile_name.startswith(partial_arg):
+                            start_pos = -len(words[-1]) if (len(words) > 2 and not text[-1].isspace()) else 0
+                            yield Completion(profile_name, start_position=start_pos)
+                    return
+                return # No mcp_profile_manager or no profiles
+
+        # Fallback to existing general command argument completion
+        if (len(words) <= 1 or text[-1].isspace()) and cmd != "/mcp": # Avoid this path if we handled /mcp above
+             return
+
+        # If we fell through /mcp logic, and we are not at a space, use original partial.
+        # Otherwise, partial_arg would have been set above.
+        if cmd != "/mcp" and not text[-1].isspace(): # Original logic for other commands
+            partial = words[-1].lower()
+        else: # Use the partial_arg determined for argument completion
+            partial = partial_arg
 
         matches, _, _ = self.commands.matching_commands(cmd)
         if len(matches) == 1:
@@ -983,22 +1031,41 @@ class InputOutput:
 
     def tool_output(self, *messages, log_only=False, bold=False):
         if messages:
-            hist = " ".join(messages)
+            hist_parts = []
+            for m in messages:
+                if isinstance(m, Text):
+                    hist_parts.append(m.plain)
+                else:
+                    hist_parts.append(str(m))
+            hist = " ".join(hist_parts)
             hist = f"{hist.strip()}"
             self.append_chat_history(hist, linebreak=True, blockquote=True)
 
         if log_only:
             return
 
-        messages = list(map(Text, messages))
-        style = dict()
+        processed_messages = []
+        for m in messages:
+            if not isinstance(m, Text):
+                # If m is a string, parse it for Rich markup
+                processed_messages.append(Text.from_markup(str(m)))
+            else:
+                # If m is already a Text object, use it as is
+                processed_messages.append(m)
+        
+        style_args = {}
         if self.pretty:
             if self.tool_output_color:
-                style["color"] = ensure_hash_prefix(self.tool_output_color)
-            style["reverse"] = bold
+                style_args["color"] = ensure_hash_prefix(self.tool_output_color)
+            if bold: # bold is a boolean, reverse is the RichStyle attribute
+                style_args["reverse"] = True
+        
+        style = RichStyle(**style_args) if style_args else None
 
-        style = RichStyle(**style)
-        self.console.print(*messages, style=style)
+        if style:
+            self.console.print(*processed_messages, style=style)
+        else:
+            self.console.print(*processed_messages)
 
     def get_assistant_mdstream(self):
         mdargs = dict(style=self.assistant_output_color, code_theme=self.code_theme)

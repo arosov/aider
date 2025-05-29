@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import asyncio
+import base64
 import hashlib
 import json
 import locale
@@ -25,7 +27,7 @@ except ImportError:  # Babel not installed – we will fall back to a small mapp
     Locale = None
 from json.decoder import JSONDecodeError
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 from litellm import experimental_mcp_client
 from rich.console import Console
@@ -39,6 +41,7 @@ from aider.io import ConfirmGroup, InputOutput
 from aider.linter import Linter
 from aider.llm import litellm
 from aider.models import RETRY_TIMEOUT
+from aider.mcp.server import McpServer
 from aider.reasoning_tags import (
     REASONING_TAG,
     format_reasoning_content,
@@ -124,8 +127,7 @@ class Coder:
     ignore_mentions = None
     chat_language = None
     file_watcher = None
-    mcp_servers = None
-    mcp_tools = None
+    mcp_profile_manager = None
 
     @classmethod
     def create(
@@ -186,6 +188,7 @@ class Coder:
                 total_tokens_sent=from_coder.total_tokens_sent,
                 total_tokens_received=from_coder.total_tokens_received,
                 file_watcher=from_coder.file_watcher,
+                mcp_profile_manager=from_coder.mcp_profile_manager,
             )
             use_kwargs.update(update)  # override to complete the switch
             use_kwargs.update(kwargs)  # override passed kwargs
@@ -342,10 +345,11 @@ class Coder:
         file_watcher=None,
         auto_copy_context=False,
         auto_accept_architect=True,
-        mcp_servers=None,
+        mcp_profile_manager=None,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
         self.analytics = analytics if analytics is not None else Analytics()
+        self.mcp_profile_manager = mcp_profile_manager
 
         self.event = self.analytics.event
         self.chat_language = chat_language
@@ -369,7 +373,6 @@ class Coder:
         self.detect_urls = detect_urls
 
         self.num_cache_warming_pings = num_cache_warming_pings
-        self.mcp_servers = mcp_servers
 
         if not fnames:
             fnames = []
@@ -534,9 +537,9 @@ class Coder:
         self.auto_test = auto_test
         self.test_cmd = test_cmd
 
-        # Instantiate MCP tools
-        if self.mcp_servers:
-            self.initialize_mcp_tools()
+        # MCP tools are now initialized via MCPProfileManager when a profile is enabled.
+        # BaseCoder will get tools from the active pool.
+
         # validate the functions jsonschema
         if self.functions:
             from jsonschema import Draft7Validator
@@ -1218,8 +1221,10 @@ class Coder:
         else:
             quad_backtick_reminder = ""
 
-        if self.mcp_tools and len(self.mcp_tools) > 0:
-            final_reminders.append(self.gpt_prompts.tool_prompt)
+        if self.mcp_profile_manager:
+            tool_prompt_from_mcp = self.mcp_profile_manager.get_tool_prompt_if_active()
+            if tool_prompt_from_mcp:
+                final_reminders.append(tool_prompt_from_mcp)
 
         final_reminders = "\n\n".join(final_reminders)
 
@@ -1649,163 +1654,179 @@ class Coder:
         if tool_call_response is None:
             return False
 
-        tool_calls = tool_call_response.choices[0].message.tool_calls
+        llm_tool_calls = tool_call_response.choices[0].message.tool_calls
+        if not llm_tool_calls:
+            return False
+
         # Collect all tool calls grouped by server
-        server_tool_calls = self._gather_server_tool_calls(tool_calls)
+        # The keys of server_tool_calls are McpServer instances
+        server_tool_calls_map = self._gather_server_tool_calls(llm_tool_calls)
 
-        if server_tool_calls and self.num_tool_calls < self.max_tool_calls:
-            self._print_tool_call_info(server_tool_calls)
+        if server_tool_calls_map and self.num_tool_calls < self.max_tool_calls:
+            self._print_tool_call_info(server_tool_calls_map)
 
-            if self.io.confirm_ask("Run tools?"):
-                tool_responses = self._execute_tool_calls(server_tool_calls)
+            approved_server_tool_calls_map: Dict[McpServer, List[Any]] = {}
+            any_tool_cancelled = False
 
-                # Add the assistant message with tool calls
-                # Converting to a dict so it can be safely dumped to json
+            for mcp_server_instance, tool_calls_for_server in server_tool_calls_map.items():
+                server_name = mcp_server_instance.name
+                server_no_confirm = False # Default to needing confirmation
+
+                if self.mcp_profile_manager:
+                    server_no_confirm = self.mcp_profile_manager.is_server_no_confirm(server_name)
+
+                proceed_for_this_server = False
+                if server_no_confirm:
+                    proceed_for_this_server = True
+                else:
+                    if self.io.confirm_ask(f"Run tools for server '{server_name}'?"):
+                        proceed_for_this_server = True
+                    else:
+                        self.io.tool_output(f"Tool execution for server '{server_name}' cancelled by user.")
+                        any_tool_cancelled = True
+                
+                if proceed_for_this_server:
+                    approved_server_tool_calls_map[mcp_server_instance] = tool_calls_for_server
+
+            if approved_server_tool_calls_map:
+                tool_responses = self._execute_tool_calls(approved_server_tool_calls_map)
+
+                # Add the assistant message with ALL original tool calls
+                # (even if some were cancelled, the LLM requested them)
                 self.cur_messages.append(tool_call_response.choices[0].message.to_dict())
 
-                # Add all tool responses
+                # Add responses only for the tools that were actually executed
                 for tool_response in tool_responses:
                     self.cur_messages.append(tool_response)
+                
+                return True # Indicates that some tools were processed or attempted
+            elif any_tool_cancelled:
+                # All tools were cancelled by the user, but we should still record the LLM's attempt
+                self.cur_messages.append(tool_call_response.choices[0].message.to_dict())
+                # Add a generic response indicating cancellation if needed, or just return False
+                # For now, returning False implies no *successful* tool execution path was taken.
+                return False 
+            else:
+                # No tools to execute (e.g., map was empty initially, or all were filtered out for other reasons)
+                return False
 
-                return True
+
         elif self.num_tool_calls >= self.max_tool_calls:
             self.io.tool_warning(f"Only {self.max_tool_calls} tool calls allowed, stopping.")
             return False
 
-    def _print_tool_call_info(self, server_tool_calls):
-        """Print information about an MCP tool call."""
-        self.io.tool_output("Preparing to run MCP tools", bold=True)
-
-        for server, tool_calls in server_tool_calls.items():
+    def _print_tool_call_info(self, server_tool_calls_map):
+        """Print information about an MCP tool call on a single line."""
+        for server, tool_calls in server_tool_calls_map.items():
             for tool_call in tool_calls:
-                self.io.tool_output(f"Tool Call: {tool_call.function.name}")
-                self.io.tool_output(f"Arguments: {tool_call.function.arguments}")
-                self.io.tool_output(f"MCP Server: {server.name}")
+                output_str = (
+                    f"[reverse][bold]MCP[/bold][/reverse] [yellow]{server.name}:"
+                    f" {tool_call.function.name}[/yellow] ({tool_call.function.arguments})"
+                )
+                self.io.tool_output(output_str)
 
                 if self.verbose:
-                    self.io.tool_output(f"Tool ID: {tool_call.id}")
-                    self.io.tool_output(f"Tool type: {tool_call.type}")
+                    self.io.tool_output(
+                        f"  (Verbose: ID={tool_call.id}, Type={tool_call.type})"
+                    )
+        self.io.tool_output("") # Add a newline after all tool call infos
 
-                self.io.tool_output("\n")
-
-    def _gather_server_tool_calls(self, tool_calls):
-        """Collect all tool calls grouped by server.
+    def _gather_server_tool_calls(self, llm_tool_calls: List[Any]) -> Dict[McpServer, List[Any]]:
+        """Collect all tool calls grouped by McpServer instance.
         Args:
-            tool_calls: List of tool calls from the LLM response
+            llm_tool_calls: List of tool_call objects from the LLM response.
 
         Returns:
-            dict: Dictionary mapping servers to their respective tool calls
+            dict: Dictionary mapping McpServer instances to a list of their respective tool_call objects.
         """
-        if not self.mcp_tools or len(self.mcp_tools) == 0:
-            return None
+        gathered_calls: Dict[McpServer, List[Any]] = {}
 
-        server_tool_calls = {}
-        for tool_call in tool_calls:
-            # Check if this tool_call matches any MCP tool
-            for server_name, server_tools in self.mcp_tools:
-                for tool in server_tools:
-                    if tool.get("function", {}).get("name") == tool_call.function.name:
-                        # Find the McpServer instance that will be used for communication
-                        for server in self.mcp_servers:
-                            if server.name == server_name:
-                                if server not in server_tool_calls:
-                                    server_tool_calls[server] = []
-                                server_tool_calls[server].append(tool_call)
-                                break
+        if not self.mcp_profile_manager or not self.mcp_profile_manager.active_mcp_client_pool:
+            return gathered_calls
 
-        return server_tool_calls
+        active_pool = self.mcp_profile_manager.active_mcp_client_pool
+        # tools_by_server is Dict[server_name, List[tool_definition_dict]]
+        tools_by_server = active_pool.get_cached_tools_by_server()
+        # mcp_instances is Dict[server_name, McpServer_instance]
+        mcp_instances = active_pool.clients
 
-    def _execute_tool_calls(self, tool_calls):
-        """Process tool calls from the response and execute them if they match MCP tools.
-        Returns a list of tool response messages."""
+        if not tools_by_server or not mcp_instances:
+            return gathered_calls
+
+        for llm_tc in llm_tool_calls:
+            found_tool_for_llm_tc = False
+            for server_name, mcp_tool_definitions in tools_by_server.items():
+                for mcp_tool_def in mcp_tool_definitions:
+                    if mcp_tool_def.get("function", {}).get("name") == llm_tc.function.name:
+                        target_server_instance = mcp_instances.get(server_name)
+                        if target_server_instance:
+                            if target_server_instance not in gathered_calls:
+                                gathered_calls[target_server_instance] = []
+                            gathered_calls[target_server_instance].append(llm_tc)
+                            found_tool_for_llm_tc = True
+                            break # Found the definition for this llm_tc, move to next llm_tc
+                if found_tool_for_llm_tc:
+                    break # Moved to next llm_tc
+
+        return gathered_calls
+
+    def _execute_tool_calls(self, server_tool_calls_map: Dict[McpServer, List[Any]]):
+        """Process tool calls from the response and execute them.
+        Args:
+            server_tool_calls_map: Dict mapping McpServer instances to their list of tool_calls.
+        Returns:
+            A list of tool response messages.
+        """
         tool_responses = []
 
         # Define the coroutine to execute all tool calls for a single server
-        async def _exec_server_tools(server, tool_calls_list):
-            tool_responses = []
+        async def _exec_server_tools(mcp_server_instance: McpServer, tool_calls_for_server: List[Any]):
+            # Renamed 'server' to 'mcp_server_instance' for clarity
+            responses_for_server = []
             try:
                 # Connect to the server once
-                session = await server.connect()
+                session = await mcp_server_instance.connect()
                 # Execute all tool calls for this server
-                for tool_call in tool_calls_list:
+                for tool_call_obj in tool_calls_for_server:
                     call_result = await experimental_mcp_client.call_openai_tool(
                         session=session,
-                        openai_tool=tool_call,
+                        openai_tool=tool_call_obj, # This is the tool_call object from LLM
                     )
                     result_text = str(call_result.content[0].text)
-                    tool_responses.append(
-                        {"role": "tool", "tool_call_id": tool_call.id, "content": result_text}
+                    responses_for_server.append(
+                        {"role": "tool", "tool_call_id": tool_call_obj.id, "content": result_text}
                     )
             finally:
-                await server.disconnect()
-            return tool_responses
+                await mcp_server_instance.disconnect()
+            return responses_for_server
 
         # Execute all tool calls concurrently
-        async def _execute_all_tool_calls():
+        async def _execute_all_tool_calls_async():
             tasks = []
-            for server, tool_calls_list in tool_calls.items():
-                tasks.append(_exec_server_tools(server, tool_calls_list))
+            for mcp_server_instance, tool_calls_for_server in server_tool_calls_map.items():
+                tasks.append(_exec_server_tools(mcp_server_instance, tool_calls_for_server))
             # Wait for all tasks to complete
-            results = await asyncio.gather(*tasks)
-            return results
+            results_list_of_lists = await asyncio.gather(*tasks, return_exceptions=True)
+            return results_list_of_lists
 
         # Run the async execution and collect results
-        if tool_calls:
-            all_results = asyncio.run(_execute_all_tool_calls())
+        if server_tool_calls_map:
+            all_results_nested = asyncio.run(_execute_all_tool_calls_async())
             # Flatten the results from all servers
-            for server_results in all_results:
-                tool_responses.extend(server_results)
+            for server_batch_result in all_results_nested:
+                if isinstance(server_batch_result, Exception):
+                    self.io.tool_error(f"Error executing batch of tool calls: {server_batch_result}")
+                    # Potentially add a generic error tool_response for all tools in this batch
+                elif isinstance(server_batch_result, list):
+                    tool_responses.extend(server_batch_result)
 
         return tool_responses
 
-    def initialize_mcp_tools(self):
-        """
-        Initialize tools from all configured MCP servers. MCP Servers that fail to be
-        initialized will not be available to the Coder instance.
-        """
-        tools = []
-
-        async def get_server_tools(server):
-            try:
-                session = await server.connect()
-                server_tools = await experimental_mcp_client.load_mcp_tools(
-                    session=session, format="openai"
-                )
-                return (server.name, server_tools)
-            except Exception as e:
-                self.io.tool_warning(f"Error initializing MCP server {server.name}:\n{e}")
-                return None
-            finally:
-                await server.disconnect()
-
-        async def get_all_server_tools():
-            tasks = [get_server_tools(server) for server in self.mcp_servers]
-            results = await asyncio.gather(*tasks)
-            return [result for result in results if result is not None]
-
-        if self.mcp_servers:
-            tools = asyncio.run(get_all_server_tools())
-
-        if len(tools) > 0:
-            self.io.tool_output("MCP servers configured:")
-            for server_name, server_tools in tools:
-                self.io.tool_output(f"  - {server_name}")
-
-                if self.verbose:
-                    for tool in server_tools:
-                        tool_name = tool.get("function", {}).get("name", "unknown")
-                        tool_desc = tool.get("function", {}).get("description", "").split("\n")[0]
-                        self.io.tool_output(f"    - {tool_name}: {tool_desc}")
-
-        self.mcp_tools = tools
-
-    def get_tool_list(self):
-        """Get a flattened list of all MCP tools."""
-        tool_list = []
-        if self.mcp_tools:
-            for _, server_tools in self.mcp_tools:
-                tool_list.extend(server_tools)
-        return tool_list
+    def get_tool_list(self) -> List[Dict[str, Any]]:
+        """Get a flattened list of all MCP tools from the active profile."""
+        if self.mcp_profile_manager and self.mcp_profile_manager.active_mcp_client_pool:
+            return self.mcp_profile_manager.active_mcp_client_pool.get_cached_tools_flat_list(self.mcp_profile_manager)
+        return []
 
     def reply_completed(self):
         pass

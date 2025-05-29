@@ -12,6 +12,7 @@ import pyperclip
 from PIL import Image, ImageGrab
 from prompt_toolkit.completion import Completion, PathCompleter
 from prompt_toolkit.document import Document
+from prompt_toolkit.shortcuts import checkboxlist_dialog
 
 from aider import models, prompts, voice
 from aider.editor import pipe_editor
@@ -36,6 +37,7 @@ class SwitchCoder(Exception):
 class Commands:
     voice = None
     scraper = None
+    mcp_profile_manager = None
 
     def clone(self):
         return Commands(
@@ -48,6 +50,7 @@ class Commands:
             verbose=self.verbose,
             editor=self.editor,
             original_read_only_fnames=self.original_read_only_fnames,
+            mcp_profile_manager=self.mcp_profile_manager,
         )
 
     def __init__(
@@ -63,10 +66,12 @@ class Commands:
         verbose=False,
         editor=None,
         original_read_only_fnames=None,
+        mcp_profile_manager=None,
     ):
         self.io = io
         self.coder = coder
         self.parser = parser
+        self.mcp_profile_manager = mcp_profile_manager
         self.args = args
         self.verbose = verbose
 
@@ -1587,6 +1592,133 @@ class Commands:
         # Output announcements
         announcements = "\n".join(self.coder.get_announcements())
         self.io.tool_output(announcements)
+
+    def cmd_mcp(self, args_str: str):
+        "Manage MCP (Model-Controller-Proxy) profiles"
+        args = args_str.strip().split()
+
+        if not self.mcp_profile_manager:
+            self.io.tool_error("MCP profile manager is not initialized.")
+            return
+
+        if not args:
+            profiles_details = self.mcp_profile_manager.list_profiles_details()
+            self.io.tool_output("Available MCP profiles:")
+            if profiles_details:
+                for name, server_configs in profiles_details:
+                    server_names_list = [s_conf.get("name", "UnknownServer") for s_conf in server_configs]
+                    self.io.tool_output(
+                        f"  - {name}: {', '.join(server_names_list) if server_names_list else ' (no servers)'}"
+                    )
+            else:
+                self.io.tool_output("  (No profiles defined)")
+
+            active_name = self.mcp_profile_manager.active_profile_name
+            if active_name:
+                self.io.tool_output(f"\nCurrently active MCP profile: {active_name}")
+            else:
+                self.io.tool_output("\nNo MCP profile is currently active.")
+
+            self.io.tool_output("\nCommands:")
+            self.io.tool_output("  /mcp new <profile_name>     - Create a new MCP profile")
+            self.io.tool_output("  /mcp tools <server_name>    - Configure enabled tools for a server in the active profile")
+            self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
+            self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
+            self.io.tool_output("  /mcp rm <profile_name>      - Delete an MCP profile")
+            self.io.tool_output("  /mcp persist                - Save the active MCP profile as the default for next launch")
+            self.io.tool_output("  /mcp persist clear          - Clear the persisted default MCP profile")
+            return
+
+        sub_command = args[0]
+        if sub_command == "new":
+            if len(args) > 1:
+                profile_name = args[1]
+                if self.mcp_profile_manager.get_profile(profile_name):
+                    self.io.tool_error(f"Profile '{profile_name}' already exists.")
+                    return
+
+                known_server_names = self.mcp_profile_manager.get_known_server_names()
+                if not known_server_names:
+                    self.io.tool_error("No MCP servers found. Configure servers first (e.g., in .aider.conf.yml).")
+                    return
+
+                # First dialog: Select servers
+                server_selection_choices = [(name, name) for name in known_server_names]
+                selected_server_names = checkboxlist_dialog(
+                    title=f"Create MCP Profile: {profile_name} (Step 1/2)",
+                    text="Select servers to include in this profile:",
+                    values=server_selection_choices,
+                ).run()
+
+                if not selected_server_names:
+                    self.io.tool_output("Profile creation cancelled or no servers selected.")
+                    return
+
+                # Second dialog: Configure no_confirm for selected servers
+                no_confirm_choices = [(name, name) for name in selected_server_names]
+                
+                # checkboxlist_dialog returns None if Cancel is chosen
+                servers_for_no_confirm = checkboxlist_dialog(
+                    title=f"Create MCP Profile: {profile_name} (Step 2/2)",
+                    text="Select servers that should NOT require confirmation for tool use:",
+                    values=no_confirm_choices,
+                ).run()
+                
+                # If the second dialog was cancelled, treat it as cancelling the whole operation
+                if servers_for_no_confirm is None:
+                    self.io.tool_output("Profile creation cancelled during no_confirm configuration.")
+                    return
+
+                final_selected_servers_config = []
+                for server_name in selected_server_names:
+                    final_selected_servers_config.append(
+                        {
+                            "name": server_name,
+                            "no_confirm": server_name in servers_for_no_confirm,
+                        }
+                    )
+                
+                self.mcp_profile_manager.create_new_profile(profile_name, final_selected_servers_config)
+                # self.io.tool_output(f"MCP profile '{profile_name}' created with {len(final_selected_servers_config)} server(s).") # Redundant with manager's output
+
+            else:
+                self.io.tool_error("Usage: /mcp new <profile_name>")
+        
+        elif sub_command == "tools":
+            if len(args) > 1:
+                server_name = args[1]
+                self.mcp_profile_manager.configure_server_tools(server_name)
+            else:
+                self.io.tool_error("Usage: /mcp tools <server_name>")
+
+        elif sub_command == "enable":
+            if len(args) > 1:
+                profile_name = args[1]
+                self.mcp_profile_manager.enable_profile(profile_name, self.coder.main_model, self.coder.main_model.edit_format)
+            else:
+                self.io.tool_error("Usage: /mcp enable <profile_name>")
+        elif sub_command == "disable":
+            if len(args) == 1:
+                self.mcp_profile_manager.disable_profile()
+            else:
+                self.io.tool_error("Usage: /mcp disable")
+        elif sub_command == "rm":
+            if len(args) > 1:
+                profile_name = args[1]
+                self.mcp_profile_manager.delete_profile(profile_name)
+            else:
+                self.io.tool_error("Usage: /mcp rm <profile_name>")
+        elif sub_command == "persist":
+            if len(args) == 1: # /mcp persist
+                self.mcp_profile_manager.persist_active_profile()
+            elif len(args) == 2 and args[1] == "clear": # /mcp persist clear
+                self.mcp_profile_manager.clear_persisted_default_profile()
+            else:
+                self.io.tool_error("Usage: /mcp persist [clear]")
+        else:
+            self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
+            self.io.tool_output("Valid subcommands are: new, tools, enable, disable, rm, persist")
+
 
     def cmd_copy_context(self, args=None):
         """Copy the current chat context as markdown, suitable to paste into a web UI"""

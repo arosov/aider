@@ -57,17 +57,16 @@ Do not edit these files!
     no_shell_cmd_reminder = ""
 
     tool_prompt = """
-<tool_calling>
-When solving problems, you have special tools available. Please follow these rules:
+You have MCP (Model Context Protocol) tools available.
+Follow these rules:
 
 1. Always use the exact format required for each tool and include all needed information.
 2. Only use tools that are currently available in this conversation.
-3. Don't mention tool names when talking to people. Say "I'll check your code" instead
-   of "I'll use the code_analyzer tool."
-4. Only use tools when necessary. If you know the answer, just respond directly.
+3. Don't mention tool names unless explicitly requested. For example, if a code_analyzer tool is available, say "I'll check your code" before making the tool call instead of "I'll use the code_analyzer tool." unless explicitly requested.
+4. Only use tools when necessary. If you know the answer, just respond directly unless explicitly requested.
 5. Before using any tool, briefly explain why you need to use it.
-</tool_calling>
 """
 
     rename_with_shell = ""
     go_ahead_tip = ""
+
