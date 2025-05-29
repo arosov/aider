@@ -336,9 +336,22 @@ class MCPProfileManager:
         """Saves the currently active MCP profile name to the configuration file."""
         if self.active_profile_name:
             save_mcp_profiles(self.profiles, self.active_profile_name)
-            self.io.tool_output(f"MCP profile '{self.active_profile_name}' persisted as active.")
+            self.persisted_active_profile_name = self.active_profile_name
+            self.io.tool_output(f"MCP profile '{self.active_profile_name}' persisted as default.")
         else:
             self.io.tool_output("No active MCP profile to persist.")
+
+    def clear_persisted_default_profile(self):
+        """Clears the persisted default MCP profile name from the configuration file."""
+        if self.persisted_active_profile_name is None:
+            self.io.tool_output("No default MCP profile is currently persisted.")
+            return
+
+        cleared_profile_name = self.persisted_active_profile_name
+        self.persisted_active_profile_name = None
+        save_mcp_profiles(self.profiles, None) # Pass None to remove the key
+        self.io.tool_output(f"Cleared persisted default MCP profile '{cleared_profile_name}'.")
+
 
     def enable_profile(self, profile_name: str, main_model, main_edit_format):
         if self.active_profile_name == profile_name and self.active_mcp_client_pool:
