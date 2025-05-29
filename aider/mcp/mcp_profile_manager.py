@@ -20,7 +20,7 @@ SERVER_NO_CONFIRM_KEY = "no_confirm"
 OLD_PROFILE_SERVER_NAMES_KEY = "server_names"
 # New top-level keys for the YAML file structure
 YAML_PROFILES_KEY = "profiles"
-YAML_ACTIVE_PROFILE_KEY = "active_profile_name"
+YAML_DEFAULT_PROFILE_KEY = "default_profile_name"
 
 
 @dataclass
@@ -38,7 +38,7 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
         profiles_list_from_yaml = []
 
         if isinstance(raw_data, dict):
-            persisted_active_profile_name = raw_data.get(YAML_ACTIVE_PROFILE_KEY)
+            persisted_active_profile_name = raw_data.get(YAML_DEFAULT_PROFILE_KEY)
             profiles_list_from_yaml = raw_data.get(YAML_PROFILES_KEY, [])
             if not isinstance(profiles_list_from_yaml, list):
                 print(f"Warning: '{YAML_PROFILES_KEY}' key in MCP profiles YAML at {MCP_PROFILES_YAML_PATH} is not a list. Profiles section will be ignored.")
@@ -123,7 +123,7 @@ def save_mcp_profiles(profiles: Dict[str, MCPProfile], active_profile_name: Opti
         profiles_list = [asdict(profile) for profile in profiles.values()]
         data_to_save = {YAML_PROFILES_KEY: profiles_list}
         if active_profile_name is not None:
-            data_to_save[YAML_ACTIVE_PROFILE_KEY] = active_profile_name
+            data_to_save[YAML_DEFAULT_PROFILE_KEY] = active_profile_name
         
         with open(MCP_PROFILES_YAML_PATH, 'w') as f:
             yaml.dump(data_to_save, f, sort_keys=False)
