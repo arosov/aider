@@ -969,6 +969,19 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
     # Track auto-commits configuration
     analytics.event("auto_commits", enabled=bool(args.auto_commits))
 
+    # Enable persisted default MCP profile if one exists
+    if mcp_profile_manager.persisted_active_profile_name:
+        if args.verbose:
+            io.tool_output(
+                f"Attempting to enable persisted default MCP profile:"
+                f" {mcp_profile_manager.persisted_active_profile_name}"
+            )
+        mcp_profile_manager.enable_profile(
+            mcp_profile_manager.persisted_active_profile_name,
+            main_model,
+            main_model.edit_format  # Use the main model's default edit format
+        )
+
     try:
         coder = Coder.create(
             main_model=main_model,
