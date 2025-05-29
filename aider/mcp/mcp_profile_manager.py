@@ -264,10 +264,20 @@ class MCPProfileManager:
                 )
                 if existing_server_config:
                     no_confirm_val = existing_server_config.get(SERVER_NO_CONFIRM_KEY, False)
+                    # Preserve enabled_tools if it was set for this server in the old 'all' profile
+                    # Defaults to None (all tools enabled) if not previously set or server is new
+                    enabled_tools_val = existing_server_config.get(PROFILE_SERVER_ENABLED_TOOLS_KEY, None)
+                else:
+                    # Server is new to the 'all' profile, or 'all' profile itself is new
+                    enabled_tools_val = None 
+            else:
+                # old_all_profile_data does not exist (first run or empty profiles file)
+                enabled_tools_val = None
+
             new_all_profile_servers_list.append({
                 SERVER_NAME_KEY: s_name,
                 SERVER_NO_CONFIRM_KEY: no_confirm_val,
-                PROFILE_SERVER_ENABLED_TOOLS_KEY: None # 'all' profile enables all tools by default
+                PROFILE_SERVER_ENABLED_TOOLS_KEY: enabled_tools_val
             })
         
         # Sort for consistent comparison later
