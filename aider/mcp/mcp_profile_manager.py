@@ -354,36 +354,35 @@ class MCPProfileManager:
             self.io.tool_error(f"MCP client pool not initialized for active profile '{self.active_profile_name}'. Cannot fetch tool list.")
             return
 
-        mcp_client = None
         pool = self.active_mcp_client_pool
+        # The existence of active_mcp_client_pool is already checked earlier in this function.
 
-        # Try iterating over 'mcp_servers' attribute if it's a list
-        if hasattr(pool, 'mcp_servers') and isinstance(pool.mcp_servers, list):
-            for client_in_pool in pool.mcp_servers:
-                if hasattr(client_in_pool, 'name') and client_in_pool.name == target_server_name:
-                    mcp_client = client_in_pool
-                    break
-        
-        # Fallback: Try iterating over 'clients' attribute if it's a list (previous attempt)
-        if not mcp_client and hasattr(pool, 'clients') and isinstance(pool.clients, list):
-            for client_in_pool in pool.clients:
-                if hasattr(client_in_pool, 'name') and client_in_pool.name == target_server_name:
-                    mcp_client = client_in_pool
-                    break
-
-        if not mcp_client:
+        if not hasattr(pool, 'cached_tools_by_server') or pool.cached_tools_by_server is None:
             self.io.tool_error(
-                f"MCP client for server '{target_server_name}' not found in the active pool. "
-                "It might have failed to connect, or the pool's internal client list attribute "
-                "is not recognized (tried 'mcp_servers', 'clients')."
+                f"Tool information cache is not available for active profile '{self.active_profile_name}'. "
+                "Tools might not have been fetched successfully when the profile was enabled."
             )
             return
 
-        # Assuming mcp_client.tools_available is a list of tool definition dicts
-        # Each dict: {"type": "function", "function": {"name": "tool_name", ...}}
+        # Check if the target server was even part of the successfully initialized clients in the pool.
+        # pool.clients is Dict[str, McpServer], mapping server name to McpServer instance.
+        if not hasattr(pool, 'clients') or target_server_name not in pool.clients:
+            self.io.tool_error(
+                f"Server '{target_server_name}' was not successfully initialized or found in the active MCP client pool. "
+                "Check server configuration or connection issues during profile enabling."
+            )
+            return
+            
+        # Get tool definitions from the pool's cache for the specific server.
+        # This will be None if the server isn't in the cache (e.g., failed tool fetch, or reported no tools).
+        # It will be a list (possibly empty) if tools were fetched.
+        server_tool_definitions = pool.cached_tools_by_server.get(target_server_name)
+
         all_tool_names = []
-        if hasattr(mcp_client, 'tools_available') and mcp_client.tools_available:
-            for tool_def in mcp_client.tools_available:
+        # Process server_tool_definitions if it's a non-empty list.
+        # The existing parsing logic for tool_def to populate all_tool_names follows.
+        if isinstance(server_tool_definitions, list) and server_tool_definitions:
+            for tool_def in server_tool_definitions:
                 if isinstance(tool_def, dict) and \
                    tool_def.get('type') == 'function' and \
                    isinstance(tool_def.get('function'), dict) and \
