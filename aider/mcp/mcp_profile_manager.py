@@ -355,16 +355,28 @@ class MCPProfileManager:
             return
 
         mcp_client = None
-        # Assuming active_mcp_client_pool has a list of client objects (e.g., in an attribute like 'clients'),
-        # and each client object has a 'name' attribute.
-        if hasattr(self.active_mcp_client_pool, 'clients') and isinstance(self.active_mcp_client_pool.clients, list):
-            for client_in_pool in self.active_mcp_client_pool.clients:
+        pool = self.active_mcp_client_pool
+
+        # Try iterating over 'mcp_servers' attribute if it's a list
+        if hasattr(pool, 'mcp_servers') and isinstance(pool.mcp_servers, list):
+            for client_in_pool in pool.mcp_servers:
                 if hasattr(client_in_pool, 'name') and client_in_pool.name == target_server_name:
                     mcp_client = client_in_pool
                     break
         
+        # Fallback: Try iterating over 'clients' attribute if it's a list (previous attempt)
+        if not mcp_client and hasattr(pool, 'clients') and isinstance(pool.clients, list):
+            for client_in_pool in pool.clients:
+                if hasattr(client_in_pool, 'name') and client_in_pool.name == target_server_name:
+                    mcp_client = client_in_pool
+                    break
+
         if not mcp_client:
-            self.io.tool_error(f"MCP client for server '{target_server_name}' not found in the active pool. It might have failed to connect, or the pool's client list attribute is not named 'clients'.")
+            self.io.tool_error(
+                f"MCP client for server '{target_server_name}' not found in the active pool. "
+                "It might have failed to connect, or the pool's internal client list attribute "
+                "is not recognized (tried 'mcp_servers', 'clients')."
+            )
             return
 
         # Assuming mcp_client.tools_available is a list of tool definition dicts
