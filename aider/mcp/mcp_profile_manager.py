@@ -327,6 +327,98 @@ class MCPProfileManager:
         save_mcp_profiles(self.profiles, self.active_profile_name)
         self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
 
+    def configure_server_tools(self, target_server_name: str):
+        if not self.active_profile_name:
+            self.io.tool_error("No MCP profile is currently active. Enable a profile first with `/mcp enable <profile_name>`.")
+            return
+
+        active_profile = self.get_profile(self.active_profile_name)
+        if not active_profile:
+            # This case should ideally not happen if active_profile_name is set
+            self.io.tool_error(f"Internal error: Active profile '{self.active_profile_name}' data not found.")
+            return
+
+        server_config_in_profile = None
+        server_config_index = -1
+        for i, s_conf in enumerate(active_profile.servers):
+            if s_conf.get(SERVER_NAME_KEY) == target_server_name:
+                server_config_in_profile = s_conf
+                server_config_index = i
+                break
+        
+        if not server_config_in_profile:
+            self.io.tool_error(f"Server '{target_server_name}' not found in active profile '{self.active_profile_name}'.")
+            return
+
+        if not self.active_mcp_client_pool:
+            self.io.tool_error(f"MCP client pool not initialized for active profile '{self.active_profile_name}'. Cannot fetch tool list.")
+            return
+
+        mcp_client = self.active_mcp_client_pool.get_client_by_name(target_server_name)
+        if not mcp_client:
+            self.io.tool_error(f"MCP client for server '{target_server_name}' not found in the active pool. It might have failed to connect.")
+            return
+
+        # Assuming mcp_client.tools_available is a list of tool definition dicts
+        # Each dict: {"type": "function", "function": {"name": "tool_name", ...}}
+        all_tool_names = []
+        if hasattr(mcp_client, 'tools_available') and mcp_client.tools_available:
+            for tool_def in mcp_client.tools_available:
+                if isinstance(tool_def, dict) and \
+                   tool_def.get('type') == 'function' and \
+                   isinstance(tool_def.get('function'), dict) and \
+                   isinstance(tool_def['function'].get('name'), str):
+                    all_tool_names.append(tool_def['function']['name'])
+        
+        if not all_tool_names:
+            self.io.tool_output(f"No tools reported by server '{target_server_name}'. Nothing to configure.")
+            # Ensure enabled_tools is empty or None if no tools are available
+            if server_config_in_profile.get(PROFILE_SERVER_ENABLED_TOOLS_KEY) is not None:
+                 server_config_in_profile[PROFILE_SERVER_ENABLED_TOOLS_KEY] = None # Or [] if explicit empty is preferred
+                 save_mcp_profiles(self.profiles, self.active_profile_name)
+                 self.io.tool_output(f"Cleared enabled tools for server '{target_server_name}' as it reports no available tools.")
+            return
+        
+        all_tool_names.sort()
+
+        current_enabled_tools_in_profile = server_config_in_profile.get(PROFILE_SERVER_ENABLED_TOOLS_KEY)
+        
+        pre_selected_tool_names = []
+        if current_enabled_tools_in_profile is None: # None means all tools are implicitly enabled
+            pre_selected_tool_names = list(all_tool_names)
+        else: # It's a list of explicitly enabled tools
+            pre_selected_tool_names = [
+                tool_name for tool_name in all_tool_names if tool_name in current_enabled_tools_in_profile
+            ]
+
+        choices = [(name, name) for name in all_tool_names]
+        
+        # checkboxlist_dialog expects default_values to be a list of the *values* of the selected choices
+        selected_tools_from_dialog = checkboxlist_dialog(
+            title=f"Configure Tools for Server: {target_server_name}",
+            text=f"Select tools to enable for server '{target_server_name}' in profile '{self.active_profile_name}':\n(Space to toggle, Enter to confirm)",
+            values=choices,
+            default_values=pre_selected_tool_names # Pass the names that should be pre-checked
+        ).run()
+
+        if selected_tools_from_dialog is None: # User cancelled the dialog
+            self.io.tool_output("Tool configuration cancelled.")
+            return
+
+        # Update the profile
+        # If all tools are selected, store None to signify "all enabled by default"
+        # Otherwise, store the explicit list.
+        if set(selected_tools_from_dialog) == set(all_tool_names):
+            new_enabled_tools_for_profile = None
+        else:
+            new_enabled_tools_for_profile = selected_tools_from_dialog
+            
+        active_profile.servers[server_config_index][PROFILE_SERVER_ENABLED_TOOLS_KEY] = new_enabled_tools_for_profile
+        
+        save_mcp_profiles(self.profiles, self.active_profile_name)
+        self.io.tool_output(f"Tool configuration updated for server '{target_server_name}' in profile '{self.active_profile_name}'.")
+
+
     def delete_profile(self, profile_name: str):
         if profile_name == "all":
             self.io.tool_error("The 'all' profile cannot be deleted.")
