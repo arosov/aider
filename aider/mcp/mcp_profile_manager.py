@@ -56,10 +56,10 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
         # Process the extracted list of profiles
         for profile_dict in profiles_list_from_yaml:
             if not isinstance(profile_dict, dict):
-                    print(f"Warning: Skipping non-dictionary profile entry: {profile_dict}")
-                    continue
-                try:
-                    # Ensure servers is a list of dicts with name and no_confirm.
+                print(f"Warning: Skipping non-dictionary profile entry: {profile_dict}")
+                continue
+            try:
+                # Ensure servers is a list of dicts with name and no_confirm.
                     loaded_servers_data = profile_dict.get(PROFILE_SERVERS_KEY)
                     parsed_servers_list = []
                     profile_name_for_error = profile_dict.get(PROFILE_NAME_KEY, 'UnknownProfile')
