@@ -194,6 +194,11 @@ class MCPProfileManager:
         self.active_profile_name: Optional[str] = None
         self.persisted_active_profile_name: Optional[str] = None # For storing loaded active profile name
         self.active_mcp_client_pool: Optional[MCPClientPool] = None
+        self.settings = settings
+        self.profiles: Dict[str, MCPProfile] = {}
+        self.active_profile_name: Optional[str] = None
+        self.persisted_active_profile_name: Optional[str] = None # For storing loaded active profile name
+        self.active_mcp_client_pool: Optional[MCPClientPool] = None
 
     def load_or_initialize_profiles(self):
         self.profiles, self.persisted_active_profile_name = load_mcp_profiles()
