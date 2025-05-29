@@ -354,9 +354,17 @@ class MCPProfileManager:
             self.io.tool_error(f"MCP client pool not initialized for active profile '{self.active_profile_name}'. Cannot fetch tool list.")
             return
 
-        mcp_client = self.active_mcp_client_pool.get_client_by_name(target_server_name)
+        mcp_client = None
+        # Assuming active_mcp_client_pool has a list of client objects (e.g., in an attribute like 'clients'),
+        # and each client object has a 'name' attribute.
+        if hasattr(self.active_mcp_client_pool, 'clients') and isinstance(self.active_mcp_client_pool.clients, list):
+            for client_in_pool in self.active_mcp_client_pool.clients:
+                if hasattr(client_in_pool, 'name') and client_in_pool.name == target_server_name:
+                    mcp_client = client_in_pool
+                    break
+        
         if not mcp_client:
-            self.io.tool_error(f"MCP client for server '{target_server_name}' not found in the active pool. It might have failed to connect.")
+            self.io.tool_error(f"MCP client for server '{target_server_name}' not found in the active pool. It might have failed to connect, or the pool's client list attribute is not named 'clients'.")
             return
 
         # Assuming mcp_client.tools_available is a list of tool definition dicts
