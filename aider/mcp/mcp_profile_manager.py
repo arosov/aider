@@ -107,9 +107,9 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
 
                     profile = MCPProfile(**profile_dict) 
                     profiles[profile.name] = profile
-                except TypeError as e: # Catches issues like missing 'name' or other fields for MCPProfile
-                    profile_name_display = profile_dict.get(PROFILE_NAME_KEY, str(profile_dict))
-                    print(f"Warning: Skipping malformed profile entry for '{profile_name_display}': {e}")
+            except TypeError as e: # Catches issues like missing 'name' or other fields for MCPProfile
+                profile_name_display = profile_dict.get(PROFILE_NAME_KEY, str(profile_dict))
+                print(f"Warning: Skipping malformed profile entry for '{profile_name_display}': {e}")
         return profiles, persisted_active_profile_name
     except FileNotFoundError:
         return {}, None
