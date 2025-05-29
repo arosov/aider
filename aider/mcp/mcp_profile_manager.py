@@ -291,9 +291,9 @@ class MCPProfileManager:
                     self.io.tool_output("Updated MCP profile 'all' with current server configurations (names or no_confirm values changed).")
         
         if needs_save:
-            # self.active_profile_name is None at this point, so this will either
-            # not write the active_profile_name key or write it as null if it was newly created.
-            save_mcp_profiles(self.profiles, self.active_profile_name)
+            # self.active_profile_name is None at this point.
+            # We pass self.persisted_active_profile_name to preserve the loaded default.
+            save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
 
     def get_profile(self, name: str) -> Optional[MCPProfile]:
         return self.profiles.get(name)
@@ -324,7 +324,7 @@ class MCPProfileManager:
         
         new_profile = MCPProfile(name=profile_name, servers=selected_servers_config)
         self.profiles[profile_name] = new_profile
-        save_mcp_profiles(self.profiles, self.active_profile_name)
+        save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
         self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
 
     def configure_server_tools(self, target_server_name: str):
@@ -383,7 +383,7 @@ class MCPProfileManager:
             # Ensure enabled_tools is empty or None if no tools are available
             if server_config_in_profile.get(PROFILE_SERVER_ENABLED_TOOLS_KEY) is not None:
                  server_config_in_profile[PROFILE_SERVER_ENABLED_TOOLS_KEY] = None # Or [] if explicit empty is preferred
-                 save_mcp_profiles(self.profiles, self.active_profile_name)
+                 save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
                  self.io.tool_output(f"Cleared enabled tools for server '{target_server_name}' as it reports no available tools.")
             return
         
@@ -423,7 +423,7 @@ class MCPProfileManager:
             
         active_profile.servers[server_config_index][PROFILE_SERVER_ENABLED_TOOLS_KEY] = new_enabled_tools_for_profile
         
-        save_mcp_profiles(self.profiles, self.active_profile_name)
+        save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
         self.io.tool_output(f"Tool configuration updated for server '{target_server_name}' in profile '{self.active_profile_name}'.")
 
 
@@ -437,12 +437,20 @@ class MCPProfileManager:
             return
 
         if self.active_profile_name == profile_name:
-            self.disable_profile() # This will also save the state with active_profile_name as None
+            # This will set self.active_profile_name = None in memory.
+            # The save call within disable_profile will use self.persisted_active_profile_name.
+            self.disable_profile()
 
-        del self.profiles[profile_name]
-        # Save the deletion of the profile, preserving the current active_profile_name
-        # (which would be None if the deleted profile was the active one).
-        save_mcp_profiles(self.profiles, self.active_profile_name)
+        profile_was_persisted_default = (self.persisted_active_profile_name == profile_name)
+        
+        del self.profiles[profile_name] # Delete from in-memory dict
+
+        if profile_was_persisted_default:
+            self.persisted_active_profile_name = None # Update in-memory persisted name
+            self.io.tool_output(f"MCP profile '{profile_name}' was the persisted default and has been cleared as default.")
+        
+        # Save the updated profiles list and the current (possibly updated) persisted_active_profile_name
+        save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
         self.io.tool_output(f"MCP profile '{profile_name}' deleted.")
 
     def is_server_no_confirm(self, server_name_to_check: str) -> bool:
@@ -581,7 +589,10 @@ class MCPProfileManager:
 
         self.active_mcp_client_pool = pool
         self.active_profile_name = profile_name
-        save_mcp_profiles(self.profiles, self.active_profile_name)
+        # Enabling a profile does not change the persisted default profile.
+        # Only /mcp persist command does that.
+        # We still save the profiles list in case other changes (like 'all' profile update) occurred.
+        save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
         self.io.tool_output(f"MCP profile '{profile_name}' enabled with {len(matched_server_configs)} server(s).")
 
     def disable_profile(self):
@@ -594,8 +605,12 @@ class MCPProfileManager:
 
         was_active = self.active_profile_name is not None
         if was_active:
-            self.io.tool_output(f"MCP profile '{self.active_profile_name}' disabled.")
+            disabled_profile_name = self.active_profile_name
             self.active_profile_name = None
-            save_mcp_profiles(self.profiles, self.active_profile_name)
+            # Disabling a profile does not change the persisted default profile.
+            # Only /mcp persist clear command does that.
+            # We still save the profiles list in case other changes occurred.
+            save_mcp_profiles(self.profiles, self.persisted_active_profile_name)
+            self.io.tool_output(f"MCP profile '{disabled_profile_name}' disabled.")
         else:
             self.io.tool_output("No MCP profile was active.")
