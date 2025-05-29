@@ -16,6 +16,7 @@ PROFILE_NAME_KEY = "name"
 PROFILE_SERVERS_KEY = "servers"
 SERVER_NAME_KEY = "name"
 SERVER_NO_CONFIRM_KEY = "no_confirm"
+PROFILE_SERVER_ENABLED_TOOLS_KEY = "enabled_tools"  # New key for server entry in profile
 # Old key, for removal during load if present
 OLD_PROFILE_SERVER_NAMES_KEY = "server_names"
 # New top-level keys for the YAML file structure
@@ -26,7 +27,7 @@ YAML_DEFAULT_PROFILE_KEY = "default_profile_name"
 @dataclass
 class MCPProfile:
     name: str
-    servers: List[Dict[str, Any]] # Each dict: {'name': str, 'no_confirm': bool}
+    servers: List[Dict[str, Any]] # Each dict: {'name': str, 'no_confirm': bool, 'enabled_tools': Optional[List[str]]}
 
 def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
     profiles: Dict[str, MCPProfile] = {}
@@ -66,8 +67,13 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
 
                     if isinstance(loaded_servers_data, list):
                         for server_entry in loaded_servers_data:
-                            if isinstance(server_entry, str):
-                                parsed_servers_list.append({SERVER_NAME_KEY: server_entry, SERVER_NO_CONFIRM_KEY: False})
+                            current_server_dict = {}
+                            if isinstance(server_entry, str): # server_entry is just a name
+                                current_server_dict = {
+                                    SERVER_NAME_KEY: server_entry,
+                                    SERVER_NO_CONFIRM_KEY: False,
+                                    PROFILE_SERVER_ENABLED_TOOLS_KEY: None # Default for string-only entry
+                                }
                             elif isinstance(server_entry, dict):
                                 s_name = server_entry.get(SERVER_NAME_KEY)
                                 if not isinstance(s_name, str) or not s_name:
@@ -77,10 +83,25 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
                                 if not isinstance(s_no_confirm, bool):
                                     print(f"Warning: '{SERVER_NO_CONFIRM_KEY}' for server '{s_name}' in profile '{profile_name_for_error}' is not a boolean (type: {type(s_no_confirm)}). Defaulting to False.")
                                     s_no_confirm = False
-                                parsed_servers_list.append({SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: s_no_confirm})
+
+                                current_server_dict = {
+                                    SERVER_NAME_KEY: s_name,
+                                    SERVER_NO_CONFIRM_KEY: s_no_confirm
+                                }
+
+                                enabled_tools_val = server_entry.get(PROFILE_SERVER_ENABLED_TOOLS_KEY)
+                                if enabled_tools_val is not None: # Key is present
+                                    if isinstance(enabled_tools_val, list) and all(isinstance(tool_name, str) for tool_name in enabled_tools_val):
+                                        current_server_dict[PROFILE_SERVER_ENABLED_TOOLS_KEY] = enabled_tools_val
+                                    else:
+                                        print(f"Warning: '{PROFILE_SERVER_ENABLED_TOOLS_KEY}' for server '{s_name}' in profile '{profile_name_for_error}' is invalid (must be a list of strings). Defaulting to all tools enabled for this server in this profile.")
+                                        current_server_dict[PROFILE_SERVER_ENABLED_TOOLS_KEY] = None
+                                else: # Key is not present
+                                    current_server_dict[PROFILE_SERVER_ENABLED_TOOLS_KEY] = None
                             else:
                                 print(f"Warning: Invalid server entry type in profile '{profile_name_for_error}': {server_entry} (type: {type(server_entry)}). Skipping this server.")
                                 continue
+                            parsed_servers_list.append(current_server_dict)
                     elif loaded_servers_data is not None: # It was present but not a list
                         print(
                             f"Warning: '{PROFILE_SERVERS_KEY}' for profile '{profile_name_for_error}' is not a list"
@@ -120,8 +141,23 @@ def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
 
 def save_mcp_profiles(profiles: Dict[str, MCPProfile], active_profile_name: Optional[str]):
     try:
-        profiles_list = [asdict(profile) for profile in profiles.values()]
-        data_to_save = {YAML_PROFILES_KEY: profiles_list}
+        profiles_list_to_save = []
+        for profile_obj in profiles.values():
+            profile_dict = asdict(profile_obj) # Converts MCPProfile to dict
+            
+            # Ensure 'servers' key exists and is a list before iterating
+            if PROFILE_SERVERS_KEY in profile_dict and isinstance(profile_dict[PROFILE_SERVERS_KEY], list):
+                processed_servers = []
+                for server_conf_dict in profile_dict[PROFILE_SERVERS_KEY]:
+                    # server_conf_dict is a new dict created by asdict
+                    if PROFILE_SERVER_ENABLED_TOOLS_KEY in server_conf_dict and \
+                       server_conf_dict[PROFILE_SERVER_ENABLED_TOOLS_KEY] is None:
+                        del server_conf_dict[PROFILE_SERVER_ENABLED_TOOLS_KEY]
+                    processed_servers.append(server_conf_dict)
+                profile_dict[PROFILE_SERVERS_KEY] = processed_servers
+            profiles_list_to_save.append(profile_dict)
+
+        data_to_save = {YAML_PROFILES_KEY: profiles_list_to_save}
         if active_profile_name is not None:
             data_to_save[YAML_DEFAULT_PROFILE_KEY] = active_profile_name
         
@@ -227,7 +263,11 @@ class MCPProfileManager:
                 )
                 if existing_server_config:
                     no_confirm_val = existing_server_config.get(SERVER_NO_CONFIRM_KEY, False)
-            new_all_profile_servers_list.append({SERVER_NAME_KEY: s_name, SERVER_NO_CONFIRM_KEY: no_confirm_val})
+            new_all_profile_servers_list.append({
+                SERVER_NAME_KEY: s_name,
+                SERVER_NO_CONFIRM_KEY: no_confirm_val,
+                PROFILE_SERVER_ENABLED_TOOLS_KEY: None # 'all' profile enables all tools by default
+            })
         
         # Sort for consistent comparison later
         new_all_profile_servers_list_sorted = sorted(new_all_profile_servers_list, key=lambda x: x[SERVER_NAME_KEY])
@@ -322,6 +362,28 @@ class MCPProfileManager:
                 return server_config.get(SERVER_NO_CONFIRM_KEY, False)
         
         return False # Server not found in profile or no_confirm not set
+
+    def get_enabled_tools_for_server(self, server_name_to_check: str) -> Optional[List[str]]:
+        """
+        Returns the list of enabled tool names for a specific server in the
+        currently active profile. Returns None if all tools are implicitly enabled
+        (i.e., 'enabled_tools' was not specified or was null for this server in the profile).
+        Returns an empty list if the server is found but explicitly has no tools enabled (e.g. enabled_tools: []).
+        Returns None if the profile is not active or the server is not found in the active profile.
+        """
+        if not self.active_profile_name:
+            return None
+
+        active_profile = self.get_profile(self.active_profile_name)
+        if not active_profile:
+            return None
+
+        for server_config in active_profile.servers:
+            if server_config.get(SERVER_NAME_KEY) == server_name_to_check:
+                # .get will return None if PROFILE_SERVER_ENABLED_TOOLS_KEY is missing
+                return server_config.get(PROFILE_SERVER_ENABLED_TOOLS_KEY)
+        
+        return None # Server not found in profile
 
     def get_tool_prompt_if_active(self) -> Optional[str]:
         """
