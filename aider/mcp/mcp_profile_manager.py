@@ -402,6 +402,10 @@ class MCPProfileManager:
 
         current_enabled_tools_in_profile = server_config_in_profile.get(PROFILE_SERVER_ENABLED_TOOLS_KEY)
         
+        # Determine which tools should be pre-selected in the dialog:
+        # - If current_enabled_tools_in_profile is None, all available tools are pre-selected.
+        # - Otherwise, only tools present in both all_tool_names (from server)
+        #   and current_enabled_tools_in_profile (from saved profile) are pre-selected.
         pre_selected_tool_names = []
         if current_enabled_tools_in_profile is None: # None means all tools are implicitly enabled
             pre_selected_tool_names = list(all_tool_names)
