@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
 import yaml
 import json # Added
+from prompt_toolkit.shortcuts import checkboxlist_dialog # Added
 from aider.mcp import load_mcp_servers # Added
 from aider.mcp.mcp_client_pool import MCPClientPool
 from aider.coders.base_prompts import CoderPrompts

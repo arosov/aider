@@ -1621,14 +1621,12 @@ class Commands:
 
             self.io.tool_output("\nCommands:")
             self.io.tool_output("  /mcp new <profile_name>     - Create a new MCP profile")
+            self.io.tool_output("  /mcp tools <server_name>    - Configure enabled tools for a server in the active profile")
             self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
             self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
             self.io.tool_output("  /mcp rm <profile_name>      - Delete an MCP profile")
             self.io.tool_output("  /mcp persist                - Save the active MCP profile as the default for next launch")
             self.io.tool_output("  /mcp persist clear          - Clear the persisted default MCP profile")
-            # Add more subcommands as they are implemented
-            # self.io.tool_output("  /mcp add <profile_name> <server_name>")
-            # self.io.tool_output("  /mcp remove <profile_name> <server_name>")
             return
 
         sub_command = args[0]
@@ -1681,10 +1679,17 @@ class Commands:
                     )
                 
                 self.mcp_profile_manager.create_new_profile(profile_name, final_selected_servers_config)
-                self.io.tool_output(f"MCP profile '{profile_name}' created with {len(final_selected_servers_config)} server(s).")
+                # self.io.tool_output(f"MCP profile '{profile_name}' created with {len(final_selected_servers_config)} server(s).") # Redundant with manager's output
 
             else:
                 self.io.tool_error("Usage: /mcp new <profile_name>")
+        
+        elif sub_command == "tools":
+            if len(args) > 1:
+                server_name = args[1]
+                self.mcp_profile_manager.configure_server_tools(server_name)
+            else:
+                self.io.tool_error("Usage: /mcp tools <server_name>")
 
         elif sub_command == "enable":
             if len(args) > 1:
@@ -1712,7 +1717,7 @@ class Commands:
                 self.io.tool_error("Usage: /mcp persist [clear]")
         else:
             self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
-            self.io.tool_output("Valid subcommands are: new, enable, disable, rm, persist")
+            self.io.tool_output("Valid subcommands are: new, tools, enable, disable, rm, persist")
 
 
     def cmd_copy_context(self, args=None):
