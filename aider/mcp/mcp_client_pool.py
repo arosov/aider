@@ -1,8 +1,11 @@
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
+import asyncio
+import logging
+from typing import List, Dict, Any, Optional, Tuple
 
 from aider.mcp.server import McpServer # Assuming McpServer is in this path
+from aider.mcp.tool_filter import filter_tools_for_server
 
 
 class MCPClientPool:
@@ -119,17 +122,105 @@ class MCPClientPool:
             self.io.tool_output(f"Fetched {num_tools} tool(s) from {num_servers} server(s).")
 
 
-    def get_cached_tools_flat_list(self) -> List[Dict[str, Any]]:
+    def get_cached_tools_flat_list(self, mcp_profile_manager) -> List[Dict[str, Any]]:
         """
-        Returns a flat list of all cached tool definitions.
+        Returns a flat list of tool definitions from all servers in the pool,
+        filtered by the enabled_tools setting in the active MCP profile for each server.
         """
-        if not self.cached_tools_by_server:
-            return []
+        all_effective_tools_flat = []
+        if self.cached_tools_by_server and mcp_profile_manager and mcp_profile_manager.active_profile_name:
+            for server_name, tools_definitions_for_server in self.cached_tools_by_server.items():
+                if tools_definitions_for_server: # Ensure the list is not empty
+                    # Get enabled tool names for this server from the active profile
+                    enabled_tool_names = mcp_profile_manager.get_enabled_tools_for_server(server_name)
+                    
+                    # Filter the tools for this server
+                    filtered_server_tools = filter_tools_for_server(tools_definitions_for_server, enabled_tool_names)
+                    all_effective_tools_flat.extend(filtered_server_tools)
         
-        all_tools = []
-        for server_tools in self.cached_tools_by_server.values():
-            all_tools.extend(server_tools)
-        return all_tools
+        # Basic deduplication by function name, preferring the first encountered.
+        # More sophisticated deduplication might be needed if tools can have same name but different defs.
+        seen_tool_names = set()
+        deduplicated_tools = []
+        for tool_def in all_effective_tools_flat:
+            try:
+                if isinstance(tool_def, dict) and isinstance(tool_def.get("function"), dict):
+                    tool_name = tool_def["function"].get("name")
+                    if tool_name and tool_name not in seen_tool_names:
+                        seen_tool_names.add(tool_name)
+                        deduplicated_tools.append(tool_def)
+            except (KeyError, TypeError):
+                continue # Skip malformed tool_def
+        return deduplicated_tools
+
+    def get_effective_tools_and_tool_choice(
+        self,
+        mcp_profile_manager, # MCPProfileManager instance
+        current_tool_choice: Optional[Any], # The tool_choice that would be used if no MCP filtering
+        io: Optional[Any] # For logging warnings
+    ) -> Tuple[List[Dict[str, Any]], Optional[Any]]:
+        """
+        Gets the list of MCP tool definitions, filtered by enabled status in the profile,
+        and logs a warning if current_tool_choice refers to a disabled MCP tool.
+
+        Args:
+            mcp_profile_manager: The MCPProfileManager to get enabled tool lists.
+            current_tool_choice: The tool_choice value that would be active.
+            io: InputOutput object for logging.
+
+        Returns:
+            A tuple containing:
+                - List of effective (filtered) MCP tool definitions.
+                - The original current_tool_choice (adjustment is for logging only here).
+        """
+        effective_mcp_tools_flat_list = self.get_cached_tools_flat_list(mcp_profile_manager)
+        
+        # Check if the current_tool_choice (if it's specific) refers to an MCP tool that got disabled.
+        if isinstance(current_tool_choice, dict) and current_tool_choice.get("type") == "function":
+            function_spec = current_tool_choice.get("function")
+            if isinstance(function_spec, dict):
+                chosen_tool_name = function_spec.get("name")
+                if chosen_tool_name:
+                    # Check if this chosen tool was an MCP tool by seeing if it was defined by any MCP server
+                    # (regardless of its current enabled status).
+                    was_an_mcp_tool = False
+                    if self.cached_tools_by_server:
+                        for _, tools_definitions_for_server in self.cached_tools_by_server.items():
+                            if tools_definitions_for_server:
+                                for tool_def in tools_definitions_for_server:
+                                    try:
+                                        if isinstance(tool_def, dict) and \
+                                           isinstance(tool_def.get("function"), dict) and \
+                                           tool_def["function"].get("name") == chosen_tool_name:
+                                            was_an_mcp_tool = True
+                                            break
+                                    except (KeyError, TypeError):
+                                        continue
+                            if was_an_mcp_tool:
+                                break
+                    
+                    if was_an_mcp_tool:
+                        # Now check if this chosen MCP tool is in the *effective* (enabled) list
+                        is_chosen_mcp_tool_enabled = False
+                        for tool_def in effective_mcp_tools_flat_list:
+                            try:
+                                if isinstance(tool_def, dict) and \
+                                   isinstance(tool_def.get("function"), dict) and \
+                                   tool_def["function"].get("name") == chosen_tool_name:
+                                    is_chosen_mcp_tool_enabled = True
+                                    break
+                            except (KeyError, TypeError):
+                                continue
+                        
+                        if not is_chosen_mcp_tool_enabled:
+                            if io and hasattr(io, 'tool_warning'):
+                                io.tool_warning(
+                                    f"Warning: Tool '{chosen_tool_name}' is specified by `tool_choice` but is not "
+                                    f"enabled for any server in the active MCP profile. "
+                                    f"The `tool_choice` may effectively be 'auto' or 'none' by the LLM."
+                                )
+        
+        return effective_mcp_tools_flat_list, current_tool_choice
 
     def get_cached_tools_by_server(self) -> Optional[Dict[str, List[Dict[str, Any]]]]:
         """

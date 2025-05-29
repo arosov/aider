@@ -1825,7 +1825,7 @@ class Coder:
     def get_tool_list(self) -> List[Dict[str, Any]]:
         """Get a flattened list of all MCP tools from the active profile."""
         if self.mcp_profile_manager and self.mcp_profile_manager.active_mcp_client_pool:
-            return self.mcp_profile_manager.active_mcp_client_pool.get_cached_tools_flat_list()
+            return self.mcp_profile_manager.active_mcp_client_pool.get_cached_tools_flat_list(self.mcp_profile_manager)
         return []
 
     def reply_completed(self):
