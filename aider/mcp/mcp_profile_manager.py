@@ -18,6 +18,9 @@ SERVER_NAME_KEY = "name"
 SERVER_NO_CONFIRM_KEY = "no_confirm"
 # Old key, for removal during load if present
 OLD_PROFILE_SERVER_NAMES_KEY = "server_names"
+# New top-level keys for the YAML file structure
+YAML_PROFILES_KEY = "profiles"
+YAML_ACTIVE_PROFILE_KEY = "active_profile_name"
 
 
 @dataclass
@@ -25,14 +28,34 @@ class MCPProfile:
     name: str
     servers: List[Dict[str, Any]] # Each dict: {'name': str, 'no_confirm': bool}
 
-def load_mcp_profiles() -> Dict[str, MCPProfile]:
+def load_mcp_profiles() -> Tuple[Dict[str, MCPProfile], Optional[str]]:
+    profiles: Dict[str, MCPProfile] = {}
+    persisted_active_profile_name: Optional[str] = None
     try:
         with open(MCP_PROFILES_YAML_PATH, 'r') as f:
-            profiles_data = yaml.safe_load(f)
-        if isinstance(profiles_data, list):
-            profiles = {}
-            for profile_dict in profiles_data:
-                if not isinstance(profile_dict, dict):
+            raw_data = yaml.safe_load(f)
+
+        profiles_list_from_yaml = []
+
+        if isinstance(raw_data, dict):
+            persisted_active_profile_name = raw_data.get(YAML_ACTIVE_PROFILE_KEY)
+            profiles_list_from_yaml = raw_data.get(YAML_PROFILES_KEY, [])
+            if not isinstance(profiles_list_from_yaml, list):
+                print(f"Warning: '{YAML_PROFILES_KEY}' key in MCP profiles YAML at {MCP_PROFILES_YAML_PATH} is not a list. Profiles section will be ignored.")
+                profiles_list_from_yaml = []
+        elif isinstance(raw_data, list):  # Old format compatibility
+            profiles_list_from_yaml = raw_data
+            # persisted_active_profile_name remains None
+        elif raw_data is None:  # File is empty
+            # profiles_list_from_yaml remains [], persisted_active_profile_name remains None
+            pass
+        else:  # File content is not a list or dict as expected
+            print(f"Warning: MCP profiles YAML content at {MCP_PROFILES_YAML_PATH} is not a list or dictionary. File will be treated as empty.")
+            # profiles_list_from_yaml remains [], persisted_active_profile_name remains None
+            
+        # Process the extracted list of profiles
+        for profile_dict in profiles_list_from_yaml:
+            if not isinstance(profile_dict, dict):
                     print(f"Warning: Skipping non-dictionary profile entry: {profile_dict}")
                     continue
                 try:
@@ -87,25 +110,23 @@ def load_mcp_profiles() -> Dict[str, MCPProfile]:
                 except TypeError as e: # Catches issues like missing 'name' or other fields for MCPProfile
                     profile_name_display = profile_dict.get(PROFILE_NAME_KEY, str(profile_dict))
                     print(f"Warning: Skipping malformed profile entry for '{profile_name_display}': {e}")
-            return profiles
-        elif profiles_data is None: # File is empty
-            return {}
-        else: # File content is not a list as expected
-            # Potentially log this
-            print(f"Warning: MCP profiles YAML content is not a list: {MCP_PROFILES_YAML_PATH}")
-            return {}
+        return profiles, persisted_active_profile_name
     except FileNotFoundError:
-        return {}
+        return {}, None
     except yaml.YAMLError as e:
         # Potentially log this, e.g., using io if available
         print(f"Warning: Error parsing MCP profiles YAML: {e}")
-        return {}
+        return {}, None
 
-def save_mcp_profiles(profiles: Dict[str, MCPProfile]):
+def save_mcp_profiles(profiles: Dict[str, MCPProfile], active_profile_name: Optional[str]):
     try:
         profiles_list = [asdict(profile) for profile in profiles.values()]
+        data_to_save = {YAML_PROFILES_KEY: profiles_list}
+        if active_profile_name is not None:
+            data_to_save[YAML_ACTIVE_PROFILE_KEY] = active_profile_name
+        
         with open(MCP_PROFILES_YAML_PATH, 'w') as f:
-            yaml.dump(profiles_list, f, sort_keys=False)
+            yaml.dump(data_to_save, f, sort_keys=False)
     except (IOError, yaml.YAMLError) as e:
         # Potentially log this, e.g., using io if available
         print(f"Warning: Error saving MCP profiles YAML: {e}")
@@ -171,10 +192,11 @@ class MCPProfileManager:
         self.settings = settings
         self.profiles: Dict[str, MCPProfile] = {}
         self.active_profile_name: Optional[str] = None
+        self.persisted_active_profile_name: Optional[str] = None # For storing loaded active profile name
         self.active_mcp_client_pool: Optional[MCPClientPool] = None
 
     def load_or_initialize_profiles(self):
-        self.profiles = load_mcp_profiles()
+        self.profiles, self.persisted_active_profile_name = load_mcp_profiles()
 
         mcpservers_arg_val = getattr(self.settings, 'mcp_servers', None)
         mcpservers_file_arg_val = getattr(self.settings, 'mcp_servers_file', None)
@@ -223,7 +245,9 @@ class MCPProfileManager:
                     self.io.tool_output("Updated MCP profile 'all' with current server configurations (names or no_confirm values changed).")
         
         if needs_save:
-            save_mcp_profiles(self.profiles)
+            # self.active_profile_name is None at this point, so this will either
+            # not write the active_profile_name key or write it as null if it was newly created.
+            save_mcp_profiles(self.profiles, self.active_profile_name)
 
     def get_profile(self, name: str) -> Optional[MCPProfile]:
         return self.profiles.get(name)
@@ -254,7 +278,7 @@ class MCPProfileManager:
         
         new_profile = MCPProfile(name=profile_name, servers=selected_servers_config)
         self.profiles[profile_name] = new_profile
-        save_mcp_profiles(self.profiles)
+        save_mcp_profiles(self.profiles, self.active_profile_name)
         self.io.tool_output(f"MCP Profile '{profile_name}' created and saved.")
 
     def delete_profile(self, profile_name: str):
@@ -267,10 +291,12 @@ class MCPProfileManager:
             return
 
         if self.active_profile_name == profile_name:
-            self.disable_profile() # Ensure it's disabled if it was active
+            self.disable_profile() # This will also save the state with active_profile_name as None
 
         del self.profiles[profile_name]
-        save_mcp_profiles(self.profiles)
+        # Save the deletion of the profile, preserving the current active_profile_name
+        # (which would be None if the deleted profile was the active one).
+        save_mcp_profiles(self.profiles, self.active_profile_name)
         self.io.tool_output(f"MCP profile '{profile_name}' deleted.")
 
     def is_server_no_confirm(self, server_name_to_check: str) -> bool:
@@ -366,6 +392,7 @@ class MCPProfileManager:
 
         self.active_mcp_client_pool = pool
         self.active_profile_name = profile_name
+        save_mcp_profiles(self.profiles, self.active_profile_name)
         self.io.tool_output(f"MCP profile '{profile_name}' enabled with {len(matched_server_configs)} server(s).")
 
     def disable_profile(self):
@@ -376,8 +403,10 @@ class MCPProfileManager:
                 self.active_mcp_client_pool.shutdown()
             self.active_mcp_client_pool = None
 
-        if self.active_profile_name:
+        was_active = self.active_profile_name is not None
+        if was_active:
             self.io.tool_output(f"MCP profile '{self.active_profile_name}' disabled.")
             self.active_profile_name = None
+            save_mcp_profiles(self.profiles, self.active_profile_name)
         else:
             self.io.tool_output("No MCP profile was active.")
