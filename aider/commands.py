@@ -1624,6 +1624,7 @@ class Commands:
             self.io.tool_output("  /mcp enable <profile_name>  - Enable an MCP profile")
             self.io.tool_output("  /mcp disable                - Disable the active MCP profile")
             self.io.tool_output("  /mcp rm <profile_name>      - Delete an MCP profile")
+            self.io.tool_output("  /mcp persist                - Save the active MCP profile as the default for next launch")
             # Add more subcommands as they are implemented
             # self.io.tool_output("  /mcp add <profile_name> <server_name>")
             # self.io.tool_output("  /mcp remove <profile_name> <server_name>")
@@ -1701,9 +1702,14 @@ class Commands:
                 self.mcp_profile_manager.delete_profile(profile_name)
             else:
                 self.io.tool_error("Usage: /mcp rm <profile_name>")
+        elif sub_command == "persist":
+            if len(args) == 1:
+                self.mcp_profile_manager.persist_active_profile()
+            else:
+                self.io.tool_error("Usage: /mcp persist")
         else:
             self.io.tool_error(f"Unknown /mcp subcommand: {sub_command}")
-            self.io.tool_output("Valid subcommands are: new, enable, disable, rm")
+            self.io.tool_output("Valid subcommands are: new, enable, disable, rm, persist")
 
 
     def cmd_copy_context(self, args=None):

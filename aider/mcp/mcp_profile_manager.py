@@ -327,6 +327,14 @@ class MCPProfileManager:
             return CoderPrompts.tool_prompt
         return None
 
+    def persist_active_profile(self):
+        """Saves the currently active MCP profile name to the configuration file."""
+        if self.active_profile_name:
+            save_mcp_profiles(self.profiles, self.active_profile_name)
+            self.io.tool_output(f"MCP profile '{self.active_profile_name}' persisted as active.")
+        else:
+            self.io.tool_output("No active MCP profile to persist.")
+
     def enable_profile(self, profile_name: str, main_model, main_edit_format):
         if self.active_profile_name == profile_name and self.active_mcp_client_pool:
             self.io.tool_output(f"MCP profile '{profile_name}' is already active.")
